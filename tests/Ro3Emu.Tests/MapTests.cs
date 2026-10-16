@@ -423,6 +423,8 @@ public sealed partial class MapTests : IAsyncLifetime
             await _app.Services.GetRequiredService<GameLoop>().InvokeAsync(async () =>
             {
                 var player = _app.Services.GetRequiredService<SessionRegistry>().All().Single(s => s.Account == "alice");
+                // Stop the observed summon-phase auto-repeat before the controlled settlement attempts.
+                await _app.Services.GetRequiredService<CombatService>().InterruptAsync(player);
                 var boss = _app.Services.GetRequiredService<World>().Map(player.WorldScene).Units.OfType<MonsterUnit>()
                     .Single(m => m.Uid == (long)angeling.Uuid);
                 Assert.False(player.Dead);

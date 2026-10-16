@@ -157,6 +157,13 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
     {
         await OnLoop(async () =>
         {
+            // This fixture proves the rescue/wave sequence, not survival against eleven simultaneous foes.
+            foreach (var foe in Service<World>().AllUnits().OfType<MonsterUnit>()
+                .Where(m => m.InstanceId == actor.InstanceId && !m.Dead))
+            {
+                Service<MonsterService>().Engage(foe, Session(bot));
+                foe.NextSwingMs = long.MaxValue;
+            }
             await Service<SceneService>().TeleportInMapAsync(Session(bot), new MapPoint(actor.X + 1, actor.Y, actor.Z, actor.Face));
             Service<MonsterService>().Engage(actor, Session(bot));
             actor.Hp = 1;
