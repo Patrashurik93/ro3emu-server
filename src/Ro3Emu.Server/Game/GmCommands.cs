@@ -232,6 +232,16 @@ public sealed class GmCommands(IOptions<ServerOptions> options, GameData data, S
         ["exp"] = ("<base> [job]", (s, a) => Op(s, OpAddExp, a)),
         ["points"] = ("<n>", (s, a) => Op(s, OpAddAttrPnt, a)),
         ["job"] = ("<jobId>", (s, a) => Op(s, OpSetJob, a)),
+        ["unlockall"] = ("[on|off|status] (this role; until server restart)", async (s, a) =>
+        {
+            string mode = a.Length == 0 ? "on" : a[0].ToLowerInvariant();
+            if (a.Length > 1 || mode is not ("on" or "off" or "status"))
+                throw new ArgumentException("Use !unlockall [on|off|status]");
+            var functions = services.GetRequiredService<FunctionService>();
+            if (mode != "status") await functions.SetGmFunctionsOpenAsync(s, mode == "on");
+            await ReplyAsync(s, $"GM function override {(functions.GmFunctionsOpen(s) ? "ON" : "OFF")} for this role. "
+                + "Restart restores normal gates. Quests, guides and system prerequisites are unchanged.");
+        }),
         ["clearbag"] = ("", (s, a) => Op(s, OpClearPack, a)),
         ["client"] = ("<find name>", ClientDiagnostics),
         ["speed"] = ("<speed, 0 = normal>", async (s, a) => await ReplyAsync(s, await character.SetSpeedAsync(s, L(a[0])))),

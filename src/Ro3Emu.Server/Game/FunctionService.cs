@@ -23,6 +23,21 @@ public sealed class FunctionService
     private readonly SeasonService seasons;
     private readonly TimeProvider clock;
 
+    // Explicit per-role GM test policy. Kept in memory; a server restart restores normal gates.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, byte> gmOpenRoles = new();
+
+    public bool GmFunctionsOpen(GameSession session) =>
+        session.Role is { } role && gmOpenRoles.ContainsKey(role.Id);
+
+    public async Task SetGmFunctionsOpenAsync(GameSession session, bool enabled)
+    {
+        if (session.Role == null || session.Progress == null || session.SceneLoading)
+            throw new ArgumentException("Enter the world before changing function gates.");
+        if (enabled) gmOpenRoles[session.Role.Id] = 1;
+        else gmOpenRoles.TryRemove(session.Role.Id, out _);
+        await SyncAsync(session);
+    }
+
     public FunctionService(GameData data, CharacterService character, SeasonService seasons, TimeProvider clock)
     {
         this.data = data;
@@ -57,6 +72,8 @@ public sealed class FunctionService
             || !data.Table("SeasonTalentConfig").Values.Any(r => GameData.Int(r, "_iId") > 0)
             || !IsOpen(session, 10)
             || !TaskService.IsDelivered(session, 10101170) || !TaskService.IsDelivered(session, 10103160))) return false;
+        // GM test override only bypasses function gates. Keep the structural/data guard above.
+        if (GmFunctionsOpen(session)) return true;
         // OpenContent: functions the original never opened (level 999/9999) whose client panel works.
         if (seasons.OpenContent.Forces(functionId)) return true;
         return data.Row("FunctionConfig", functionId) is not { } row || ConditionMet(session, GameData.Int(row, "_kOpenCondition"));

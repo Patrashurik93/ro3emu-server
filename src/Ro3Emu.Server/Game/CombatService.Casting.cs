@@ -32,6 +32,22 @@ public sealed partial class CombatService
 {
     public const uint SkillMove = 31112, TrapDamage = 31128;
 
+    // Kept independently of SkillCast: cancelling an animation must not reset attack speed.
+    // Weak session keys avoid retaining disconnected players. All access holds CharacterService.Lock.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameSession, NormalAttackCadence>
+        normalAttackCadence = new();
+
+    private sealed class NormalAttackCadence
+    {
+        public long RoleId;
+        public long ReadyMs;
+    }
+
+    private bool NormalAttackCoolingDown(GameSession s, JsonElement row) =>
+        GameData.Int(row, "_iIsNormalAtk") == 1
+        && normalAttackCadence.TryGetValue(s, out var cadence)
+        && cadence.RoleId == s.Role?.Id && Now < cadence.ReadyMs;
+
     /// <summary>
     /// 31102: row identity, ownership, selector, mode, all costs and cooldowns are checked before the cast commits.
     /// Target/position come from CastSkillReq; m_kSelectInfo uses relation masks, never _iDmgType as a selector.
@@ -81,7 +97,8 @@ public sealed partial class CombatService
         if (error == 0)
         {
             int group = (int)GameData.Int(row!.Value, "_iSkillID"), mode = (int)GameData.Int(row.Value, "_iMode");
-            if (Math.Max(s.SkillCds.GetValueOrDefault(group), s.SkillModeCds.GetValueOrDefault((group, mode))) > Now) error = ErrorCodes.SkillCooldown;
+            if (owned == null && NormalAttackCoolingDown(s, row.Value)) error = ErrorCodes.SkillCooldown;
+            else if (Math.Max(s.SkillCds.GetValueOrDefault(group), s.SkillModeCds.GetValueOrDefault((group, mode))) > Now) error = ErrorCodes.SkillCooldown;
             // Preserve the established cooldown refusal for a repeated cast, including during its action tail.
             else if (s.SkillCast is { Cancelled: false } active && Now < active.StartMs + active.ChantMs + active.ActionMs
                 && GameData.Int(row.Value, "_bCancelCast") == 0) error = ErrorCodes.SkillBusy;
@@ -378,6 +395,8 @@ public sealed partial class CombatService
 
     private async Task StartCastAsync(GameSession s, JsonElement row, CastSkillReq req, long id, SkillObject? actor = null)
     {
+        // Shared final gate for manual casts and both PvE/PvP automatic attack paths.
+        if (actor == null && NormalAttackCoolingDown(s, row)) return;
         var origin = actor?.Pos ?? s.Position.Clone();
         var target = FindMonster(s.WorldScene, req.TargetId);
         float face = target != null ? MonsterService.Angle(origin.X, origin.Z, target.X, target.Z) : req.Face;
@@ -387,6 +406,12 @@ public sealed partial class CombatService
             Attachment = s.Attachment, Request = req, Row = row, Origin = origin, StartedWalking = actor == null && s.Walking,
             StartMs = Now, ChantMs = (int)Math.Max(0, GameData.Int(row, "_iChantFix") + GameData.Int(row, "_iChantVar")), ActionMs = SkillMs(s, row), Operator = actor,
         };
+        if (actor == null && GameData.Int(row, "_iIsNormalAtk") == 1)
+        {
+            var cadence = normalAttackCadence.GetValue(s, _ => new NormalAttackCadence());
+            cadence.RoleId = action.OwnerId;
+            cadence.ReadyMs = action.StartMs + action.ChantMs + action.ActionMs;
+        }
         s.SkillCast = action;
         s.WorldState.ResurrectionCastId = Script(row) == "Resurrection" ? id : 0;
         s.Face = face;

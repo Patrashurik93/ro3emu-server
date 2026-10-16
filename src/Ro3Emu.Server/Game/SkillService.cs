@@ -402,6 +402,19 @@ public sealed class SkillService
         foreach (var (_, skill) in selected.SkillQueue.OrderBy(kv => kv.Key))
             if (skill.SkillId > 0 && RealId(skill.SkillId, skill.SkillLevel) is var id and > 0)
             { state.SkillWheel.SkillQueue = new SkillWheelSlot { SkillConfigId = id, Enable = true }; break; }
+        // The PC client exposes wheel slots, so keep the current career's normal attack
+        // reachable after a GM job change as well as on fresh characters.
+        int normalAttackId = NormalAttack(session.Progress!.Career);
+        if (data.Row("SkillConfig", normalAttackId) is { } normalAttack
+            && Level(session.Progress!, (int)GameData.Int(normalAttack, "_iSkillID")) > 0
+            && !state.SkillWheel.WhellSkills.Values.Any(slot => slot.SkillConfigId == normalAttackId))
+        {
+            int freeSlot = Enumerable.Range(1, BarSlots).FirstOrDefault(slot =>
+                !state.SkillWheel.WhellSkills.TryGetValue(slot, out var assigned) || assigned.SkillConfigId == 0);
+            if (freeSlot > 0)
+                state.SkillWheel.WhellSkills[freeSlot] = new SkillWheelSlot
+                    { SkillConfigId = normalAttackId, Enable = true };
+        }
         state.OriginSkillWheel = state.SkillWheel.Clone();
         return state;
     }
