@@ -116,8 +116,10 @@ public sealed class TowerTests : IAsyncLifetime
 
     private async Task Kill(BotClient bot, ulong uid)
     {
+        await NormalAttackFixture.WaitBeforeNextAsync(bot);
         // Under load the monster can step away (roam or chase) between reading its position and the cast reaching
         // the loop; the server then answers SkillDistance. Freeze its roaming and re-approach instead of failing.
+        long castId = 0;
         for (int attempt = 1; ; attempt++)
         {
             Vec3 position = null!;
@@ -135,12 +137,15 @@ public sealed class TowerTests : IAsyncLifetime
             });
             await bot.SendGameAsync(MsgId.Walk, new WalkReq { Pos = position, BStop = true, SpeedRate = 1 });
             await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = (long)uid });
-            int result = (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result;
+            var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            int result = cast.Result;
+            castId = cast.SessionId;
             if (result == ErrorCodes.SkillDistance && attempt < 3) continue;
             Assert.Equal(0, result);
             break;
         }
         await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, hit => hit.Dsts.Any(d => d.DstID == (long)uid && d.IsDead));
+        await NormalAttackFixture.WaitForTailAsync(bot, castId);
     }
 
     private long Count(BotClient bot, int entry) => Service<ItemStore>().Load((long)bot.Self!.Uuid).Where(i => i.Entry == entry).Sum(i => (long)i.Stack);

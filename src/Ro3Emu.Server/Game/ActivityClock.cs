@@ -19,7 +19,15 @@ public sealed class ActivityClock(GameData data, SeasonService seasons, TimeProv
     public DateTimeOffset UtcNow => clock.GetUtcNow();
     public DateTimeOffset LocalNow => clock.GetLocalNow();
     public TimeZoneInfo LocalTimeZone => clock.LocalTimeZone;
-    public long ServerOpen => new DateTimeOffset(seasons.Start).ToUnixTimeSeconds();
+    public long ServerOpen
+    {
+        get
+        {
+            // SeasonStart is a civil date in the realm clock, not in the Windows/Linux host timezone.
+            var local = DateTime.SpecifyKind(seasons.Start, DateTimeKind.Unspecified);
+            return new DateTimeOffset(local, clock.LocalTimeZone.GetUtcOffset(local)).ToUnixTimeSeconds();
+        }
+    }
     /// <summary>
     /// The open end of a window: 2099-01-22, the value the client data itself uses as "permanent" (TimeLimitConfig
     /// 1010/1041/1088). The year 9999 broke the client's date formatting (Lua os.date on Windows past the year 3000).

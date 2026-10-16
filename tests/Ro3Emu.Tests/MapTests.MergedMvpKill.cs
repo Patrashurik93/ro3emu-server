@@ -118,7 +118,8 @@ public sealed partial class MapTests
             try
             {
                 await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = uid });
-                Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+                var firstCast = await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser);
+                Assert.Equal(0, firstCast.Result);
                 await refused.Task.WaitAsync(Wait);
                 await WaitMergedBossAsync(uid, m => m.Hp == 1);
                 Assert.False(MergedBoss(uid).Dead);
@@ -128,6 +129,7 @@ public sealed partial class MapTests
                 Assert.DoesNotContain(alice.Inbox.Snapshot(), e => e.IsGame(CombatService.SkillHit)
                     && SkillHitInfo.Parser.ParseFrom(e.Body).Dsts.Any(d => d.DstID == uid && d.IsDead));
                 accounts.BeforeOwnedCommitForTest = null;
+                await NormalAttackFixture.WaitForTailAsync(alice, firstCast.SessionId);
                 await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = uid });
                 Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
                 await Next(alice, MvpService.DeadNotify, MVPDeadNotify.Parser);

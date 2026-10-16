@@ -146,6 +146,7 @@ public sealed partial class DungeonTests : IAsyncLifetime
 
     private async Task Kill(BotClient bot, MonsterUnit actor)
     {
+        await NormalAttackFixture.WaitBeforeNextAsync(bot);
         await OnLoop(async () =>
         {
             Assert.True(actor.Hp > 1);
@@ -160,7 +161,8 @@ public sealed partial class DungeonTests : IAsyncLifetime
             actor.Hp = 1;
         });
         await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-        Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+        Assert.Equal(0, cast.Result);
         try
         {
             await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser,
@@ -180,6 +182,7 @@ public sealed partial class DungeonTests : IAsyncLifetime
                 .Where(hit => hit.SrcID == actor.Uid || hit.Dsts.Any(d => d.DstID == actor.Uid)).TakeLast(5);
             throw new TimeoutException($"Dungeon fixture did not observe the required lethal hit: {state}; hits={string.Join("; ", hits)}", error);
         }
+        await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
     }
 
     private long Items(BotClient bot, int entry) => Service<ItemStore>().Load((long)bot.Self!.Uuid)

@@ -65,6 +65,13 @@ public sealed class DailyWindowsTests : IAsyncLifetime
         Assert.Equal(clock.Unix(end), window.End);
     }
 
+    [Fact]
+    public void ServerOpenUsesTheInjectedRealmTimezoneInsteadOfTheHostTimezone()
+    {
+        clock.Zone = TimeZoneInfo.CreateCustomTimeZone("FixtureUTC14", TimeSpan.FromHours(14), "FixtureUTC14", "FixtureUTC14");
+        Assert.Equal(clock.Unix("2026-10-05 00:00:00"), Service<ActivityClock>().ServerOpen);
+    }
+
     [ClientDataFact]
     public void WeeklyLeagueUsesOpeningWeekdayAndSkipsEmptyCustomWeeks()
     {

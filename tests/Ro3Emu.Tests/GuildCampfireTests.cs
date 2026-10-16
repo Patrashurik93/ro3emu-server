@@ -193,6 +193,7 @@ public sealed class GuildCampfireTests : IAsyncLifetime
             return Task.CompletedTask;
         });
         await alice.SendGameAsync(MsgId.Walk, new WalkReq { Pos = fruit!.Pos, BStop = true, SpeedRate = 1 });
+        await NormalAttackFixture.WaitBeforeNextAsync(alice);
         await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = fruit.Uid });
         Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
         await Next(alice, CombatService.SkillHit, SkillHitInfo.Parser,
@@ -222,6 +223,7 @@ public sealed class GuildCampfireTests : IAsyncLifetime
             return Task.CompletedTask;
         });
         await alice.SendGameAsync(MsgId.Walk, new WalkReq { Pos = boss!.Pos, BStop = true, SpeedRate = 1 });
+        await NormalAttackFixture.WaitBeforeNextAsync(alice);
         await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = boss.Uid });
         Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
         await Next(alice, CombatService.SkillHit, SkillHitInfo.Parser,
