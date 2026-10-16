@@ -162,8 +162,10 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
             actor.Hp = 1;
         });
         await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-        Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            Assert.Equal(0, cast.Result);
         await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, hit => hit.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead));
+            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
     }
 
     private static async Task<int> Interact(BotClient bot, DungeonService.SceneActorUnit actor, int interaction)

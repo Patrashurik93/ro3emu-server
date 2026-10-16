@@ -113,8 +113,10 @@ public sealed class TowerPlayerLifecycleTests : IAsyncLifetime
         });
         await bot.SendGameAsync(MsgId.Walk, new WalkReq { Pos = position, BStop = true, SpeedRate = 1 });
         await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = (long)uid });
-        Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            Assert.Equal(0, cast.Result);
         await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, hit => hit.Dsts.Any(d => d.DstID == (long)uid && d.IsDead));
+            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
     }
 
     [ClientDataFact]

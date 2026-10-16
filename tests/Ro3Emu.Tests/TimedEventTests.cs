@@ -807,8 +807,10 @@ public sealed class TimedEventTests : IAsyncLifetime
             await OnLoop(() => { actor!.Hp = 1; return Task.CompletedTask; });
             await bot.SendGameAsync(MsgId.Walk, new WalkReq { Pos = actor!.Pos, BStop = true, SpeedRate = 1 });
             await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-            Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+            var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            Assert.Equal(0, cast.Result);
             await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, h => h.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead));
+            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
             Assert.Equal((DungeonRes)1, (await Next(bot, DungeonService.Result, DungeonResNotify.Parser)).Res);
             var back = await Next(bot, MsgId.SwitchSceneLine, SwitchSceneLineResp.Parser,
                 s => s.SceneEntry != 3200101);
