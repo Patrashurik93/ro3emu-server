@@ -29,3 +29,6 @@ tools/unluac-batch/*.class
 *.db-shm
 *.db.lock
 *.pem
+
+# Server built by server.sh
+/server-bin/

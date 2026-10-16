@@ -102,7 +102,8 @@ public sealed class SkillGrowthTests : IAsyncLifetime
         await again.SendGameAsync(1023, new PlayerAssetReq { AssetType = { 5 } });
         var swordman = await Next(again, SkillService.SkillDataSync, DBSkillDataIncrement.Parser,
             m => m.SyncAllMark && m.CurrentAtkSkillId == 1100001);
-        Assert.DoesNotContain(swordman.SkillWheel.All.WhellSkills.Values,
+        // Local PC-wheel policy keeps the new career normal attack reachable after a GM job change.
+        Assert.Single(swordman.SkillWheel.All.WhellSkills.Values,
             slot => slot.SkillConfigId == 1100001);
     }
 
