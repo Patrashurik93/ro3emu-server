@@ -160,9 +160,7 @@ public sealed partial class DungeonTests : IAsyncLifetime
             Service<MonsterService>().Engage(actor, Session(bot));
             actor.Hp = 1;
         });
-        await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-        var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
-        Assert.Equal(0, cast.Result);
+        var cast = await NormalAttackFixture.CastWhenReadyAsync(bot, actor.Uid);
         try
         {
             await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser,

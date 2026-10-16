@@ -173,9 +173,7 @@ public sealed class GuildChallengeTests : IAsyncLifetime
         // after its actual action tail until the authoritative lethal hit arrives.
         for (int swing = 0; ; swing++)
         {
-            await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-            var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
-            Assert.Equal(0, cast.Result);
+            var cast = await NormalAttackFixture.CastWhenReadyAsync(bot, actor.Uid);
             var hit = await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, h => h.Dsts.Any(d => d.DstID == actor.Uid));
             await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
             if (hit.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead)) return;

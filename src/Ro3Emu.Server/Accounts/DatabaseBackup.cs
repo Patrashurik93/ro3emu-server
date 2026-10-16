@@ -29,7 +29,9 @@ public sealed class DatabaseBackup(IOptions<ServerOptions> options, AccountStore
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
-        RemoveStalePartials();
+        // .NET 10 starts BackgroundService on the thread pool. A manual copy may already be in flight;
+        // cleanup must share its gate so it cannot unlink that copy's live .partial file.
+        lock (backupGate) RemoveStalePartials();
         while (!ct.IsCancellationRequested)
         {
             try
