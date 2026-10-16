@@ -257,7 +257,7 @@ public sealed class DailyWindowsTests : IAsyncLifetime
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, "data", "config"))) dir = dir.Parent;
-        return dir?.FullName ?? throw new DirectoryNotFoundException("data/config");
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "Ro3Emu.slnx"))) dir = dir.Parent;
+        return dir?.FullName ?? throw new DirectoryNotFoundException("Ro3Emu.slnx");
     }
 }
