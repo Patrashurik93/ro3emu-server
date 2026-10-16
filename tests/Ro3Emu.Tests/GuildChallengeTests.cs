@@ -170,12 +170,14 @@ public sealed class GuildChallengeTests : IAsyncLifetime
         });
         await bot.SendGameAsync(MsgId.Walk, new WalkReq { Pos = pos, BStop = true, SpeedRate = 1 });
         // The basic attack rolls HIT against the monster's FLEE, so one swing may miss; swing again
-        // (cooldown cleared as a test aid) until the authoritative lethal hit arrives.
+        // after its actual action tail until the authoritative lethal hit arrives.
         for (int swing = 0; ; swing++)
         {
             await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = actor.Uid });
-            Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+            var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            Assert.Equal(0, cast.Result);
             var hit = await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, h => h.Dsts.Any(d => d.DstID == actor.Uid));
+            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
             if (hit.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead)) return;
             Assert.True(swing < 20, "the basic attack never landed");
             await OnLoop(() => { Session(bot).SkillCds.Clear(); Session(bot).SkillModeCds.Clear(); return Task.CompletedTask; });

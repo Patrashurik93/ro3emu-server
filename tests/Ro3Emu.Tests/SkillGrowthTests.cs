@@ -242,8 +242,11 @@ public sealed class SkillGrowthTests : IAsyncLifetime
                     Info = new SkillData { SkillId = 13006, SkillLevel = 1 } });
             Assert.Equal(0, (await Next(alice, SkillService.SkillLoad, SkillLoadResp.Parser)).Result);
             var wheel = await Next(alice, SkillService.SkillDataSync, DBSkillDataIncrement.Parser,
-                m => !m.SyncAllMark && m.SkillWheel?.Inc?.WhellSkills.ContainsKey(3) == true);
-            Assert.Equal(1300601, wheel.SkillWheel.Inc.WhellSkills[3].All.SkillConfigId);
+                m => !m.SyncAllMark && m.SkillWheel?.Inc?.WhellSkills.TryGetValue(3, out var slot) == true
+                    && (slot.All?.SkillConfigId ?? slot.Inc?.SkillConfigId) == 1300601);
+            // Our normal-attack fallback can already occupy this slot: replacement is an Inc, not an All.
+            var changedSlot = wheel.SkillWheel.Inc.WhellSkills[3];
+            Assert.Equal(1300601, changedSlot.All?.SkillConfigId ?? changedSlot.Inc?.SkillConfigId);
             await alice.SendGameAsync(SkillService.QueueUpdate, new SkillQueueUpdateReq
                 { Plan = 0, OpType = SkillLoadOperation.SkillLoadOpLoad, QueueIndex = 0,
                     Info = new SkillData { SkillId = 13006, SkillLevel = 1 } });

@@ -2,7 +2,7 @@ name: Client-independent .NET checks
 
 on:
   push:
-    branches: [main]
+    branches: [main, original]
   pull_request:
   workflow_dispatch:
 

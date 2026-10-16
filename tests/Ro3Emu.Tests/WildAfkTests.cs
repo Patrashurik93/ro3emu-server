@@ -276,12 +276,14 @@ public sealed class WildAfkTests : IAsyncLifetime
             });
             await bot.SendGameAsync(MsgId.Walk, new WalkReq { Pos = position, BStop = true, SpeedRate = 1 });
             await bot.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = uid });
-            Assert.Equal(0, (await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+            var cast = await Next(bot, CombatService.UseSkill, CastSkillRsp.Parser);
+            Assert.Equal(0, cast.Result);
             await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, x => x.Dsts.Any(d => d.DstID == uid && d.IsDead));
             var reward = await Next(bot, CharacterService.GetRewardNotify, GetRewardNotify.Parser,
                 x => x.RewardType.Contains(1) && x.Rewards.Any(i => i.ItemEntry == 100 && i.Stack < 1000));
             await Next(bot, WildAfkService.Sync, DBWildAFKInfoIncrement.Parser,
                 x => x.HasTodayKillCount && x.TodayKillCount == killCount);
+            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
             return reward.Rewards.Single(i => i.ItemEntry == 100).Stack;
         }
 

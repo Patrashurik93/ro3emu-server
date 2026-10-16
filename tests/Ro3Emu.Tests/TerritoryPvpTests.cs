@@ -135,7 +135,8 @@ public sealed class TerritoryPvpTests : IAsyncLifetime
         await attacker.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = allyId });
         Assert.Equal(3022, (await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
         await attacker.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = enemyId });
-        Assert.Equal(0, (await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        var cast = await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser);
+        Assert.Equal(0, cast.Result);
         var hit = await Next(attacker, CombatService.SkillHit, SkillHitInfo.Parser,
             h => h.Dsts.Any(d => d.DstID == enemyId && d.IsDead));
         Assert.True(Assert.Single(hit.Dsts).IsDead);
@@ -146,6 +147,7 @@ public sealed class TerritoryPvpTests : IAsyncLifetime
         Assert.True(dealt[0].Amount > 0 && dealt[0].Lethal);
         Assert.Equal(1, dealt[0].Amount); // Effective HP loss, not overkill or absorbed damage.
         Assert.Equal(1, killed);
+        await NormalAttackFixture.WaitForTailAsync(attacker, cast.SessionId);
 
         await attacker.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = enemyId });
         Assert.Equal(3022, (await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
@@ -519,8 +521,10 @@ public sealed class TerritoryPvpTests : IAsyncLifetime
         });
 
         await attacker.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = first.Uid });
-        Assert.Equal(0, (await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        var firstCast = await Next(attacker, CombatService.UseSkill, CastSkillRsp.Parser);
+        Assert.Equal(0, firstCast.Result);
         await firstKilled.Task.WaitAsync(Wait);
+        await NormalAttackFixture.WaitForTailAsync(attacker, firstCast.SessionId);
         Assert.True(first.Dead);
         Assert.Equal(0, first.Hp);
         Assert.Equal(1, firstKills);
