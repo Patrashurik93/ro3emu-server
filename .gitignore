@@ -18,3 +18,14 @@ tools/unluac-batch/*.class
 # Load test runs
 /.loadtest/
 /.loadtest-temp/
+
+# Local project artifacts and secrets
+/patch-backups/
+/local-backups/
+/.env
+/.env.*
+*.db
+*.db-wal
+*.db-shm
+*.db.lock
+*.pem
