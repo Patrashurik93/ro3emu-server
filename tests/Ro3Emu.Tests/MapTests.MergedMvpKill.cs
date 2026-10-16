@@ -122,16 +122,19 @@ public sealed partial class MapTests
                 Assert.Equal(0, firstCast.Result);
                 await refused.Task.WaitAsync(Wait);
                 await WaitMergedBossAsync(uid, m => m.Hp == 1);
+                // Disarm automatic retries while the refusal hook still protects the settlement boundary.
+                await _app.Services.GetRequiredService<GameLoop>().InvokeAsync(() =>
+                    _app.Services.GetRequiredService<CombatService>().InterruptAsync(
+                        _app.Services.GetRequiredService<SessionRegistry>().All().Single(s => s.Account == "alice")));
                 Assert.False(MergedBoss(uid).Dead);
                 Assert.Equal(1, MergedMvpSourceCount());
                 Assert.Equal(1, MergedKillReceiptCount("event/mvp-settlement"));
                 Assert.Equal(0, MergedKillReceiptCount("monster-kill"));
                 Assert.DoesNotContain(alice.Inbox.Snapshot(), e => e.IsGame(CombatService.SkillHit)
                     && SkillHitInfo.Parser.ParseFrom(e.Body).Dsts.Any(d => d.DstID == uid && d.IsDead));
-                accounts.BeforeOwnedCommitForTest = null;
                 await NormalAttackFixture.WaitForTailAsync(alice, firstCast.SessionId);
-                await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 1000001, TargetId = uid });
-                Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+                accounts.BeforeOwnedCommitForTest = null;
+                await NormalAttackFixture.CastWhenReadyAsync(alice, uid);
                 await Next(alice, MvpService.DeadNotify, MVPDeadNotify.Parser);
                 await WaitMergedBossAsync(uid, m => m.Dead);
                 Assert.Equal(1, MergedMvpSourceCount());
