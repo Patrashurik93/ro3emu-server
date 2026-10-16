@@ -175,6 +175,8 @@ public sealed class GuildChallengeTests : IAsyncLifetime
         {
             var cast = await NormalAttackFixture.CastWhenReadyAsync(bot, actor.Uid);
             var hit = await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, h => h.Dsts.Any(d => d.DstID == actor.Uid));
+            // After an observed miss, keep the next swing manual instead of racing the armed auto-repeat.
+            await OnLoop(() => Service<CombatService>().InterruptAsync(Session(bot)));
             await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
             if (hit.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead)) return;
             Assert.True(swing < 20, "the basic attack never landed");

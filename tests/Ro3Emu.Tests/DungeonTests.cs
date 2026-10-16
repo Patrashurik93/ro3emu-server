@@ -146,6 +146,8 @@ public sealed partial class DungeonTests : IAsyncLifetime
 
     private async Task Kill(BotClient bot, MonsterUnit actor)
     {
+        // The entry test may have left a real attack loop armed. Stop it before reducing HP to one.
+        await OnLoop(() => Service<CombatService>().InterruptAsync(Session(bot)));
         await NormalAttackFixture.WaitBeforeNextAsync(bot);
         await OnLoop(async () =>
         {
