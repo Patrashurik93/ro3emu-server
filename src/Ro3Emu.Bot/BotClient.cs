@@ -185,6 +185,15 @@ public sealed class BotClient : IAsyncDisposable
         });
     }
 
+    /// <summary>Another ConnectServerReq{NewConnection} on the open game connection (tests: an account switch on one
+    /// connection); returns the gate's answer.</summary>
+    public async Task<ConnectServerResp.Types.RespType> ConnectAgainAsync(byte[] engineToken)
+    {
+        using var connectExpected = _inbox.Expect(e => e.Kind == BotEventKind.ConnectResponse);
+        await SendWithDrainAsync(_game!, 3, new ConnectServerReq { Type = ConnectServerReq.Types.ReqType.NewConnection, Token = ByteString.CopyFrom(engineToken) });
+        return (await connectExpected.WaitAsync(Timeout, _cts.Token)).ConnectResult;
+    }
+
     public async Task<AccountLoginCreateRoleResp> CreateRoleAsync(string name, int sex = 1, int hair = 0)
     {
         return await StageAsync("create-role", async () =>
@@ -434,11 +443,14 @@ public sealed class BotClient : IAsyncDisposable
     }
 
     /// <summary>The head-name lookup the client makes for every player unit (UserDataService.getAttributeBatchByVersion).</summary>
-    public async Task<Dictionary<string, object?>> GetRoleAttributesAsync(params long[] uids)
+    public Task<Dictionary<string, object?>> GetRoleAttributesAsync(params long[] uids) => GetRoleFieldsAsync(uids, "Base", "Name");
+
+    /// <summary>getAttributeBatchByVersion for the given global cache types ("Base", "Personal"...), each at version 0.</summary>
+    public async Task<Dictionary<string, object?>> GetRoleFieldsAsync(IEnumerable<long> uids, params string[] types)
     {
         var request = new Dictionary<string, object>
         {
-            ["UidFieldVersions"] = uids.ToDictionary(u => u.ToString(), _ => (object)new Dictionary<string, object> { ["Base"] = 0, ["Name"] = 0 }),
+            ["UidFieldVersions"] = uids.ToDictionary(u => u.ToString(), _ => (object)types.ToDictionary(t => t, _ => (object)0)),
         };
         return MessagePackSerializer.Deserialize<Dictionary<string, object?>>(await CallMicroAsync("UserDataService", "getAttributeBatchByVersion", request));
     }

@@ -45,6 +45,8 @@ public sealed partial class TeamService : IGameTicker
         public long PlayBook;
         public readonly Dictionary<int, TeamFlagInfo> Flags = new();
         public readonly Dictionary<long, long> Applicants = new();
+        /// <summary>Guild League elites a quick elite team admits without the leader's approval (TeamService.Elite).</summary>
+        public readonly HashSet<long> Elites = new();
         public readonly HashSet<long> ViceLeaders = new();
         public readonly Dictionary<long, TeamMemberOnlineState> OnlineStates = new();
         public readonly Dictionary<long, TeamMemberChatState> ChatStates = new();
@@ -102,6 +104,11 @@ public sealed partial class TeamService : IGameTicker
     /// <summary>Authoritative roster, including offline members; dungeon admission must not silently omit them.</summary>
     public IReadOnlyList<long> MembersOf(long role) =>
         _byMember.TryGetValue(role, out var team) ? team.Members.ToArray() : [role];
+
+    /// <summary>The leader's forbidden-chat restriction on a member (TeamChangeMemberState, team.Muted); used by the
+    /// voice relay to silence a muted member's microphone the same way text chat is silenced.</summary>
+    public bool IsForbiddenChat(long role) =>
+        _byMember.TryGetValue(role, out var team) && team.Muted.Contains(role);
 
     public Task CreateAsync(GameSession s, TeamCreateReq req) =>
         RunTeamAsync(s, "team/create", () => CreateCoreAsync(s, req));

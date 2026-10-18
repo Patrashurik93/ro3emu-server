@@ -28,13 +28,29 @@ public sealed class DungeonCatalog(GameData data, WorldData worldData, MonsterSe
         public long SceneEntry => GameData.Int(Config, "_iID");
         public int MultiId => Multi is { } row ? (int)GameData.Int(row, "_iID") : 0;
         public int DurationMs => (int)Math.Clamp(GameData.Int(Config, "_iLimitTime"), 1000, int.MaxValue);
-        public DungeonInitData Init(long teamId = 0, long instanceId = 0) => LayerId != 0
-            // The client never reads it (LC_DunGeon_Valhalla); filled as the proto defines it (inferred).
-            ? new() { HeroicSpiritDungeonInitData = new HeroicSpiritDungeonInitData { ChallengeId = LayerId } }
-            : MultiId == 0 ? new()
-            : new() { MultiDungeonInitData = new MultiDungeonInitData
-            { MultiDungeonId = MultiId, MarkId = Mark, TeamID = teamId, DungeonId = instanceId } };
+        /// <summary>A Hidden Realm run: the random entry (TenGameplayConfig _iIsRandomDungeon) this boss was drawn for.</summary>
+        public RandomOrigin? Origin { get; init; }
+        /// <summary>The entry whose rewards, allowance and record the run counts against: the Hidden Realm's own row when
+        /// drawn from it (inferred: its boss row 4300099 carries the awards and _iMatchID), else the fought boss's.</summary>
+        public JsonElement? RewardMulti => Origin?.Multi ?? Multi;
+        public JsonElement? RewardBoss => Origin?.Boss ?? Boss;
+        public int RewardMark => Origin?.Mark ?? Mark;
+        public int RewardMultiId => RewardMulti is { } row ? (int)GameData.Int(row, "_iID") : 0;
+        public DungeonInitData Init(long teamId = 0, long instanceId = 0)
+        {
+            var init = LayerId != 0
+                // The client never reads it (LC_DunGeon_Valhalla); filled as the proto defines it (inferred).
+                ? new DungeonInitData { HeroicSpiritDungeonInitData = new HeroicSpiritDungeonInitData { ChallengeId = LayerId } }
+                : MultiId == 0 ? new DungeonInitData()
+                : new DungeonInitData { MultiDungeonInitData = new MultiDungeonInitData
+                { MultiDungeonId = MultiId, MarkId = Mark, TeamID = teamId, DungeonId = instanceId } };
+            if (Origin is { } origin && init.MultiDungeonInitData != null)
+                init.MultiDungeonInitData.Origin = new MultiDungeonInfo { MultiDungeonId = GameData.Int(origin.Multi, "_iID"), MarkId = origin.Mark };
+            return init;
+        }
     }
+
+    public sealed record RandomOrigin(JsonElement Multi, JsonElement Boss, int Mark);
 
     public IEnumerable<JsonElement> MultiRows => data.Table("TenGameplayConfig").Values
         .Where(r => TowerService.FitsPlayBook(r, seasons.PlayBook));
@@ -106,8 +122,7 @@ public sealed class DungeonCatalog(GameData data, WorldData worldData, MonsterSe
         if (data.Row("DungeonConfig", scene) is not { } config || GameData.Int(config, "_iGamePlayType") != 19
             || worldData.Map(scene) is not { Born: not null }) return null;
         string editor = config.GetProperty("_kResSceneEditorName").GetString() ?? "";
-        string path = Path.Combine(options.Value.GameDataDir ?? options.Value.DataDir, "sceneeditor", editor.ToLowerInvariant() + ".json");
-        if (!File.Exists(path)) return null;
+        if (SceneEditorFile(editor) is not { } path) return null;
         using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
         if (!doc.RootElement.TryGetProperty("m_kMonsterSpawnPoints", out var points)) return null;
         int difficulty = data.Table("GuildChallengeConfig").Values.Where(r => r.GetProperty("_kDungeonId").EnumerateArray()
@@ -160,8 +175,7 @@ public sealed class DungeonCatalog(GameData data, WorldData worldData, MonsterSe
             || !layer.TryGetProperty("_kMonsterPreview", out var bosses) || bosses.ValueKind != JsonValueKind.Array
             || bosses.GetArrayLength() == 0) return null;
         string editor = config.GetProperty("_kResSceneEditorName").GetString() ?? "";
-        string path = Path.Combine(options.Value.GameDataDir ?? options.Value.DataDir, "sceneeditor", editor.ToLowerInvariant() + ".json");
-        if (!File.Exists(path)) return null;
+        if (SceneEditorFile(editor) is not { } path) return null;
         using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
         if (!doc.RootElement.TryGetProperty("m_kMonsterSpawnPoints", out var points) || points.ValueKind != JsonValueKind.Object) return null;
         var serverPoints = points.EnumerateObject().Select(p => p.Value.Clone())
@@ -198,6 +212,9 @@ public sealed class DungeonCatalog(GameData data, WorldData worldData, MonsterSe
         return spawns.Count > 0 ? [new Wave(1, spawns)] : [];
     }
 
+    private string? SceneEditorFile(string editor) =>
+        DataFiles.Find(Path.Combine(options.Value.GameDataDir ?? options.Value.DataDir, "sceneeditor"), editor + ".json");
+
     /// <summary>
     /// Scene-editor points carry positions, not a recovered server encounter script. The selected multi-boss at
     /// a uniquely named BOSS point, else the first ungrouped server spawn point, and sequential groups of
@@ -211,9 +228,7 @@ public sealed class DungeonCatalog(GameData data, WorldData worldData, MonsterSe
     private IReadOnlyList<Wave> Spawns(JsonElement config, JsonElement? boss, MapWorld map)
     {
         string? editor = config.TryGetProperty("_kResSceneEditorName", out var name) ? name.GetString() : null;
-        if (string.IsNullOrEmpty(editor)) return [];
-        string path = Path.Combine(options.Value.GameDataDir ?? options.Value.DataDir, "sceneeditor", editor.ToLowerInvariant() + ".json");
-        if (!File.Exists(path)) return [];
+        if (string.IsNullOrEmpty(editor) || SceneEditorFile(editor) is not { } path) return [];
         using var doc = JsonDocument.Parse(File.ReadAllBytes(path));
         if (!doc.RootElement.TryGetProperty("m_kMonsterSpawnPoints", out var points) || points.ValueKind != JsonValueKind.Object) return [];
         var serverPoints = points.EnumerateObject().Select(p => p.Value)

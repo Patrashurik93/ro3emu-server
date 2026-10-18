@@ -270,6 +270,7 @@ public sealed partial class CombatService : IGameTicker
         scene.Leaving.Add(ClearSkillsAsync);
         scene.Leaving.Add(buffs.ClearOnSceneAsync);
         character.ExtraAttributes.Add(PassiveAttributes);
+        character.ExtraAttributes.Add(ResonanceAttributes); // Job Resonance stats (CombatService.Restraint)
         world.UnitRemoved.Add(unit => { if (unit is MonsterUnit m) _fightingMonsters.Remove(m); return Task.CompletedTask; });
         skills.Learned.Add(RefreshSkillParametersAsync);
         skills.Learned.Add(character.RefreshStatsAsync);
@@ -280,6 +281,8 @@ public sealed partial class CombatService : IGameTicker
         character.ProgressHandlers.Add(buffs.ReconcileEnergyAsync);
         monsters.AttackPet = MonsterAttackPetAsync;
         buffs.UnitChanged.Add(PublishTowerPetStatsAsync);
+        WireBuffRules();
+        WireBossSkills();
     }
 
     private static long Now => MonsterService.NowMs;
@@ -367,6 +370,7 @@ public sealed partial class CombatService : IGameTicker
                 var defender = new Fighter(0, 0, monster.Template.Flee, 0, monster.Template.Level, monster.Template.Element)
                     { Def = monster.Template.Def, Mdef = monster.Template.Mdef, Flee = monster.Template.Flee };
                 var (damage, result) = Damage(attacker, defender, row);
+                foreach (var adjust in MonsterDamageAdjusters) damage = adjust(monster, damage, false);
                 long previousHp = monster.Hp;
                 monster.Hp = Math.Max(0, monster.Hp - damage);
                 if (monster.Hp == 0) killed.Add(monster); // reserve before awaited callbacks
@@ -436,37 +440,45 @@ public sealed partial class CombatService : IGameTicker
             if (pet.Dead || pet.Hp <= 0 || monster.Dead || monster.Hp <= 0 || monster.WorldScene != pet.WorldScene
                 || pet.Owner.TowerAttempt is not { Loaded: true, Settled: false } current || !current.Pets.Contains(pet)
                 || MonsterService.Distance(monster.X, monster.Z, pet.X, pet.Z) > monster.Template.AttackRange + 2f) return;
-            var attacker = new Fighter(monster.Template.Atk, monster.Template.Matk, monster.Template.Hit,
-                monster.Template.Cri, monster.Template.Level, monster.Template.Element);
-            var stats = pet.CombatStats;
-            var defender = new Fighter(0, 0, 0, 0, pet.Level, pet.Element)
-                { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
-            var row = data.Row("SkillConfig", monster.Template.NormalSkill);
-            var (damage, result) = row is { } r ? Damage(attacker, defender, r)
-                : (Math.Max(1, monster.Template.Atk), DamageHitResult.Normal);
-            damage = ScaleMonsterDamage(damage, monster.DamageRatio);
-            damage = ApplyPetSupportResistance(damage, buffs.UnitAttributes(pet), row, monster.Template.Element);
-            long beforeShield = damage;
-            damage = await buffs.AbsorbAsync(pet, damage);
-            pet.Hp = Math.Max(0, pet.Hp - damage);
-            // Reserve death before any awaited broadcasts: neither the pet nor another pending swing
-            // may act on zero HP while the death notification and substitution are being delivered.
-            pet.Dead = pet.Hp == 0;
-            var hit = new SkillHitInfo
-            {
-                SrcID = monster.Uid, SkillId = monster.Template.NormalSkill, ShowPoint = 1000002,
-                SessionId = castId, SrcElement = monster.Template.Element,
-                Dsts = { new DamageInfo { DstID = pet.Uid, Damage = damage, SheildDamage = beforeShield - damage, HitResult = result,
-                    DstElement = pet.Element, IsDead = pet.Hp == 0 } },
-            };
-            await world.ToUnitViewersAsync(monster, SkillHit, hit);
-            await world.ToUnitViewersAsync(pet, AoiAttrChange, pet.HpChange());
-            if (!pet.Dead) return;
-            await buffs.ClearUnitAsync(pet);
-            monster.PetTarget = null;
-            await world.ToUnitViewersAsync(pet, EntityBaseChange, pet.StateChange());
-            foreach (var handler in TowerPetDied) await handler(pet);
+            await DamageTowerPetAsync(monster, pet, data.Row("SkillConfig", monster.Template.NormalSkill), monster.Template.NormalSkill, castId, 1000002);
         });
+    }
+
+    /// <summary>A monster's hit on a tower pet: the row's damage, pet support resistance, shields, HP and its death.</summary>
+    private async Task DamageTowerPetAsync(MonsterUnit monster, TowerPetUnit pet, JsonElement? row, int skillId, long castId,
+        int showPoint, int damagePercent = 100)
+    {
+        var attacker = new Fighter(monster.Template.Atk, monster.Template.Matk, monster.Template.Hit,
+            monster.Template.Cri, monster.Template.Level, monster.Template.Element);
+        var stats = pet.CombatStats;
+        var defender = new Fighter(0, 0, 0, 0, pet.Level, pet.Element)
+            { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
+        var (damage, result) = row is { } r ? Damage(attacker, defender, r)
+            : (Math.Max(1, monster.Template.Atk), DamageHitResult.Normal);
+        damage = ScaleMonsterDamage(damage, monster.DamageRatio);
+        if (damagePercent != 100) damage = damagePercent <= 0 ? 0 : ScaleMonsterDamage(damage, damagePercent * 100);
+        foreach (var adjust in MonsterDamageAdjusters) damage = adjust(monster, damage, true);
+        damage = ApplyPetSupportResistance(damage, buffs.UnitAttributes(pet), row, monster.Template.Element);
+        long beforeShield = damage;
+        damage = await buffs.AbsorbAsync(pet, damage);
+        pet.Hp = Math.Max(0, pet.Hp - damage);
+        // Reserve death before any awaited broadcasts: neither the pet nor another pending swing
+        // may act on zero HP while the death notification and substitution are being delivered.
+        pet.Dead = pet.Hp == 0;
+        var hit = new SkillHitInfo
+        {
+            SrcID = monster.Uid, SkillId = skillId, ShowPoint = showPoint,
+            SessionId = castId, SrcElement = monster.Template.Element,
+            Dsts = { new DamageInfo { DstID = pet.Uid, Damage = damage, SheildDamage = beforeShield - damage, HitResult = result,
+                DstElement = pet.Element, IsDead = pet.Hp == 0 } },
+        };
+        await world.ToUnitViewersAsync(monster, SkillHit, hit);
+        await world.ToUnitViewersAsync(pet, AoiAttrChange, pet.HpChange());
+        if (!pet.Dead) return;
+        await buffs.ClearUnitAsync(pet);
+        if (ReferenceEquals(monster.PetTarget, pet)) monster.PetTarget = null;
+        await world.ToUnitViewersAsync(pet, EntityBaseChange, pet.StateChange());
+        foreach (var handler in TowerPetDied) await handler(pet);
     }
 
     private async Task MonsterAttackAsync(MonsterUnit m, GameSession p)
@@ -483,9 +495,11 @@ public sealed partial class CombatService : IGameTicker
             SrcID = m.Uid, SkillID = m.Template.NormalSkill, TargetId = p.Role!.Id, TargetPos = p.Position.Clone(), Face = m.Face,
             SessionId = session, ChantMs = 0, SkillMs = m.Template.SkillMs, StartTime = Now,
         };
-        await SendMonsterTimelineAsync(m, use);
-        if (data.Row("SkillConfig", m.Template.NormalSkill) is { } cooldownRow && GameData.Int(cooldownRow, "_iCD") is var cooldown and > 0)
-            await BossCooldownStartedAsync(m, m.Template.NormalSkill, Now + cooldown);
+        // Like a player's cast: a row with an _iSkillEffectLevel takes the HIGH_LEVEL route (the Phantom Realm and
+        // Valhalla Maya swings 4340001/5920101 have level 1). A normal attack never starts a boss-panel cooldown
+        // (31125 is for the boss's skills).
+        await SendMonsterTimelineAsync(m, use, highLevel: data.Row("SkillConfig", m.Template.NormalSkill) is { } swingRow
+            && GameData.Int(swingRow, "_iSkillEffectLevel") > 0);
         ScheduleRuntime(m.WorldScene, TimeSpan.FromSeconds(m.Template.HitPointSeconds), async () =>
         {
             if (m.Dead || m.Hp <= 0 || p.Dead || p.Role == null || p.SceneLoading || p.WorldScene != m.WorldScene) return;
@@ -499,6 +513,7 @@ public sealed partial class CombatService : IGameTicker
             var row = data.Row("SkillConfig", m.Template.NormalSkill);
             var (damage, result) = row is { } r ? Damage(attacker, defender, r) : (Math.Max(1, m.Template.Atk), DamageHitResult.Normal);
             damage = ScaleMonsterDamage(damage, m.DamageRatio);
+            foreach (var adjust in MonsterDamageAdjusters) damage = adjust(m, damage, true);
             if (damage > 0) foreach (var modifier in IncomingDamageAdjusters) damage = Math.Max(0, await modifier(m, p, result, damage));
             var committed = await CommitPlayerDamageAsync(p, damage, row,
                 () => !m.Dead && m.Hp > 0 && ReferenceEquals(p.Role, targetRole)

@@ -188,8 +188,8 @@ public sealed class RoleSessionService(RoleStore roles, Data.GameData data, Buff
         {
             // C/D 15: the select reserves its role, account and lifecycle plus the keys its login callees write (own
             // Prontera settlements, own Eve cycle, current territory season, its guild's caravan and challenge gates,
-            // its pending MVP and dungeon obligations) - not Realm. Realm-shared maintenance runs on the services' own
-            // tickers; LoginScopeAuditTests guards that nothing else is needed.
+            // its pending MVP, dungeon, Mock Battle and timed-battle obligations) - not Realm. Realm-shared maintenance
+            // runs on the services' own tickers; LoginScopeAuditTests guards that nothing else is needed.
             using (var scope = await EnterSelectAsync(owners, req.Id, session.Account!))
             {
                 if (!SelectionAvailable(session)) return;
@@ -272,6 +272,7 @@ public sealed class RoleSessionService(RoleStore roles, Data.GameData data, Buff
         session.CurrentSp = null;
         session.Dead = false;
         session.CareerSpecial = null; session.CareerPendants = [];
+        session.Personal = null;
         session.Mounts = null; session.MountState = new(); session.Wardrobe = null; session.Totems = null; session.Genre = null;
         session.TotemSwitchUtc = default;
         session.SceneLoading = true;
@@ -295,7 +296,7 @@ public sealed class RoleSessionService(RoleStore roles, Data.GameData data, Buff
                 ServerTimeMs = NowMs(),
                 ServerInfo = new ServerBasicInfo
                 {
-                    ServerOpenTime = (ulong)new DateTimeOffset(seasons.Start).ToUnixTimeSeconds(),
+                    ServerOpenTime = (ulong)seasons.StartTime,
                     ServerLogicTime = (ulong)clock.GetUtcNow().ToUnixTimeSeconds(),
                 },
             },

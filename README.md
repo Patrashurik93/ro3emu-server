@@ -1,287 +1,239 @@
 # RO3Emu: Ragnarok Online 3 server emulator
 
-An open-source C# server emulator for the **Ragnarok Online 3 PC client**. Explore its protocol, run a local server
-with data exported from your own client, or help implement and test game systems. The server uses .NET 10 and SQLite;
-the client integration needs the original PC client, which this repository does not provide.
-
-**Start here:** [Project website](https://aethai.github.io/ro3emu-server/) · [Set up a local server](#getting-started) · [See the current scope](#what-works) ·
-[Browse the documentation](docs/README.md) · [Contribute](CONTRIBUTING.md) ·
-[Report a bug or suggest a feature](https://github.com/aethai/ro3emu-server/issues/new/choose)
+An open-source server for the **Ragnarok Online 3 PC client**, written in C# (.NET 10, SQLite). Play on your own PC,
+host a server for friends, or help rebuild the original game server one system at a time. The goal is a faithful 1:1
+server first; changes to the original rules come after.
 
 <p align="center"><img src="docs/assets/banner.svg" alt="RO3Emu server emulator architecture and game world" width="100%"></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/C%23-.NET%2010-512BD4?logo=dotnet&logoColor=white" alt=".NET 10">
-  <img src="https://img.shields.io/badge/storage-SQLite%20WAL-003B57?logo=sqlite&logoColor=white" alt="SQLite">
-  <img src="https://img.shields.io/badge/client-RO3%20PC%20(Unity%20%2B%20Lua)-c98a2b" alt="RO3 PC client">
-  <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
-  <a href="https://github.com/aethai/ro3emu-server/actions/workflows/ci.yml"><img src="https://github.com/aethai/ro3emu-server/actions/workflows/ci.yml/badge.svg" alt="Client-independent .NET checks"></a>
+  <a href="https://github.com/aethai/ro3emu-server/releases/latest"><img src="https://img.shields.io/github/v/release/aethai/ro3emu-server?label=release" alt="Latest release"></a>
   <a href="https://github.com/aethai/ro3emu-server/actions/workflows/tests.yml"><img src="https://github.com/aethai/ro3emu-server/actions/workflows/tests.yml/badge.svg" alt="Tests on Linux"></a>
+  <a href="https://github.com/aethai/ro3emu-server/actions/workflows/ci.yml"><img src="https://github.com/aethai/ro3emu-server/actions/workflows/ci.yml/badge.svg" alt="Client-independent .NET checks"></a>
+  <img src="https://img.shields.io/badge/C%23-.NET%2010-512BD4?logo=dotnet&logoColor=white" alt=".NET 10">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="GPL-3.0">
 </p>
 
 <p align="center">
+  <a href="#play-on-your-own-pc">Play</a> ·
+  <a href="#play-with-friends">Play with friends</a> ·
   <a href="#what-works">What works</a> ·
-  <a href="#getting-started">Getting started</a> ·
-  <a href="#playing-together">Playing together</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#development">Development</a> ·
-  <a href="#documentation">Documentation</a>
+  <a href="#for-developers">For developers</a> ·
+  <a href="#documentation">Documentation</a> ·
+  <a href="https://aethai.github.io/ro3emu-server/">Website</a> ·
+  <a href="https://github.com/aethai/ro3emu-server/issues/new/choose">Report a bug</a>
 </p>
-
-The PC client is a Unity (Mono) game with Lua logic. Its message table, protobuf schema, flows and config tables
-provide much of this emulator's reference material. Original server behavior that the client cannot establish is
-reconstructed and marked *(inferred)* in code and documentation. This is an independent project in the tradition of
-Athena, eAthena, rAthena and Hercules.
 
 ---
 
+## Play on your own PC
+
+1. Download **`RO3Emu-win-x64.zip`** from the [latest release](https://github.com/aethai/ro3emu-server/releases/latest)
+   and extract it anywhere.
+2. Double-click **`RO3Emu.exe`**. Nothing to install: no .NET, Java or Node.js. If Windows says "Windows protected
+   your PC" (RO3Emu is not signed), click *More info*, then *Run anyway*.
+3. The first time, it finds your Ragnarok 3: Genesis game folder (or asks for the one with `ro3.exe`), prepares the
+   game data it needs (about a minute), starts the server and the game. Next time it only starts the server and the
+   game.
+4. Log in with any account name and password: the account is created on first login. Keep the RO3Emu window open
+   while you play; press **Q** there (or close it) to stop the server.
+
+**Don't have the game?** RO3Emu.exe downloads it from the official Genesis update servers (about 24 GB) and checks every
+file against the publisher's signature: it offers this when it finds no game folder, or run `RO3Emu.exe install`.
+RO3Emu never hosts game files. Tested with the Genesis client releases of 7 and 16 October 2026.
+
+| Command | What it does |
+|---|---|
+| `RO3Emu.exe` | play on your own server (same as `RO3Emu.exe start`) |
+| `RO3Emu.exe join <address>` | play on someone else's server (`host`, `host:port` or `http://host:port`) |
+| `RO3Emu.exe host` | your server, open to friends (`--gm <account>` for GM commands) |
+| `RO3Emu.exe install [folder]` / `update [folder]` | the game from the official servers, every file checked |
+| `RO3Emu.exe restore` | undo the patch: the game talks to the official servers again |
+| `RO3Emu.exe check` | does this game version fit this RO3Emu? (changes nothing) |
+| `RO3Emu.exe diag` | makes `RO3Emu-diagnostics.zip` for a bug report |
+
+**What it changes.** In the game folder: a few DLLs in `ro3_Data\Managed` (the originals are kept in `ro3emu-backup`)
+and `ro3emu\loc_en.tsv` (English texts, built from your own game files). Next to RO3Emu.exe: `data\` (game data and
+your characters), `logs\` and `RO3Emu.settings.json`.
+
+> [!WARNING]
+> Don't let the publisher's launcher repair a patched game folder: it puts the original DLLs back. Run RO3Emu.exe
+> again and it patches the game again.
+
+## Play with friends
+
+**On Windows.** The host runs `RO3Emu.exe host`; it prints the address to share (Windows asks once whether the server
+may use the network: allow it). Friends run `RO3Emu.exe join <that address>`. For friends outside your home network,
+forward TCP ports `5380`, `20000` and `33100` on your router to the host and share your public IP.
+
+**On Linux.** Download **`RO3Emu-server-linux-x64.tar.gz`**, extract it and run `server.sh`; nothing to install:
+
+```bash
+./server.sh --client /path/to/ROO_PC --host <public IP> --gm <your account>     # a game folder copied from Windows
+./server.sh --download /srv/ro3/ROO_PC --host <public IP> --gm <your account>   # or only the files it needs, from Genesis
+./server.sh --service ...                                                       # install it as a systemd service
+```
+
+Open TCP `5380`, `20000` and `33100`.
+
+**Good to know**
+- **GM commands** (`!help` in chat) are on for every account when you play on your own PC. A hosted server gives them
+  only to the accounts you name with `--gm` ([GM access](docs/guide/gm-access.md)).
+- **Bug reports from players:** the Feedback button in the game menu or `/bug <text>` in chat ([feedback](docs/guide/feedback.md)).
+- **Backups:** the database is backed up to `data/backups/` at start and every 6 hours (newest 20 kept).
+- **One session per account:** a second login takes over from the first. The client runs one instance per PC;
+  `Ro3Emu.BotCli` can stand in for extra players when you test alone.
+
+| Hardware | Minimum | Measured target (500 players) |
+|---|---|---|
+| CPU | 2 cores | at most 2 cores used by the server |
+| RAM | 2 GB | at most 2 GB working set |
+| Disk | 3 GB plus the game | SSD recommended |
+
 ## What works
 
-The repository implements the areas below, with different levels of test and live-client coverage. They are an
-implementation map, not a claim of complete original-server parity. See the linked system notes for inferred rules
-and remaining gaps.
+The server answers the client the way the original did: same messages, same order, same rules where the client shows
+them. Rules the client cannot establish are reconstructed and marked *(inferred)* in the code and the
+[system notes](docs/systems). With `Ro3Emu:OpenContent` (on by default for hosted servers) everything the client can
+show is playable from day one, without season or server-day gates ([details](docs/guide/open-content.md)).
 
 <table>
 <tr><td valign="top" width="50%">
 
 **World**
-- SDK login, server list, both gates (RSA, then RC4 + zlib), role create / select / switch / delete
-- maps, portals, NPCs, Kafra travel, map **lines** (channels) with per-map caps and line switching
-- directed visibility on a grid with the client's own cap, nearest first, name boards beyond it
-- monsters, spawns, MVPs, regeneration, death and revive, silent reconnect
+- login, server list, both gates, character create / select / delete
+- maps, portals, NPCs, Kafra travel, wings, map channels
+- monsters, MVPs with their summons and fields, death and revive
+- silent reconnect, emotes and sitting
 
-**Combat and character**
-- skills, buffs, energy, passive skills, skill growth, talents, PvP and event fights
-- equipment, appraisal, affixes, enchanting, strengthening and refining, cards, emblems
-- life jobs and gathering, pets (incl. tower pets), mounts, wardrobe, totems, job items (cart, falcon, Peco)
-- achievements, emotes and sitting
+**Character and combat**
+- skills, buffs and debuffs, damage and healing over time, auras
+- crowd-control diminishing returns, energy meters, talents, job resonance
+- level cap 99 with catch-up EXP, character power score
+- PvP and event fights
+
+**Items and progression**
+- equipment, appraisal, affixes, enchanting, strengthening, refining
+- crafting with its guarantee counters, award and choice boxes
+- cards (collection stars, insert rules, Flash cards, card effects)
+- Soul Echo, pets and the hatchery, mounts, wardrobe, totems, job items
+- achievements, codex, Growth Classroom, Seven-Day Goal, profile card
 
 </td><td valign="top" width="50%">
 
 **Economy and social**
-- trade center, stalls, auctions (guild, world and event), mail, NPC and point shops
-- friends, parties, blacklist, chat channels, teams, adventure groups
+- trade center, stalls, auctions (guild, world, event), mail
+- NPC, point and guild shops, battle pass
+- friends and gifts, parties and raids, chat channels and horns
+- party voice chat through the server (off by default, see below)
+- adventure groups
 
 **Guilds**
-- guild management, guild home, campfire, caravan, black market, guild challenge
-- **Territory Wars**: auctions, battles, escort and castle siege flows
+- management, journal, recruitment, founding, guild home
+- bonfire party, caravan, black market, Ilmata challenge
+- Guild League with elite rosters and capture rings
+- Territory Wars and the castle siege
 
 **Instances and activities**
-- dungeons, towers, matchmaking, multi-dungeons, reconstructed story dungeons and scripted story scenes
-- daily activities, quests and story flows, season pages and refine, battle pass, lottery, timed events
+- story dungeons and scripted story scenes (reconstructed)
+- Spirit Tower, Phantom Realm, Valhalla Trials, Realm of the Gods
+  (blessings, Final Trial honors, hall of fame), Hidden Realm
+- bosses cast their special skills, with phases and summons
+- Monster Hunt, Rift Crisis, Survivor Battle, Wedding Crashers,
+  Dragon Coffin Island, Mock Battle (40 vs 40), Hunting Challenge,
+  timed events, daily activities, leaderboards
 
 </td></tr>
 </table>
 
-**Open content.** `Ro3Emu:OpenContent` opens supported client-visible content across server-day gates and season
-windows; see its [behavior and known limits](docs/guide/open-content.md).
+**Not yet**
+- **Boss script mechanics:** the special skills are in, but mechanics that lived only in the original server's scripts
+  (bubbles, bells, rhythm stages) are plain area attacks, and knockback does not move players yet.
+- **Mock Battle extras:** the arena's monsters and the 40-player team frame.
+- **War of Emperium extras:** commander tools, siege weapons and vehicles.
+- **Survivor Battle extras:** follow, spectate, shop, Kafra adventure.
+- **Guild extras:** merging, impeachment, group mail.
+- **Smaller missing pieces:** shop gifting, titles, Paragon (Astral Level), and some stages of the story dungeons
+  that are still simplified.
+- **Tavern and guild voice:** only party voice is implemented.
 
-**Not yet:** the bar (tavern), guild voice, the chicken minigame, payments and a few niche panels. The original
-server's encounter scripts are not in the client, so story dungeons and bosses are reconstructions.
+**Voice.** Party voice goes through a relay in the server instead of the publisher's Tencent GME, and the patched
+client records and plays it through Windows' own winmm. It is off by default: `Voice:Port` turns it on. The voice
+stream is not encrypted yet (only its one-time ticket travels through the encrypted game gate), so the relay listens
+on loopback only unless `Voice:AllowPlaintextOffLoopback` is set.
 
-## Getting started
+## For developers
 
-### Quick start: play on your own PC (Windows)
+### Running from source
 
-1. **Install the game.** You need the Ragnarök 3: Genesis PC client (the login screen shows `0.0.1_1.1.0 Build 140054`).
-   Nothing from the game is in this repository.
-2. **Download this project:** the green **Code** button above, then **Download ZIP**, and unzip it anywhere.
-3. **Double-click `start.cmd`.** On the first run it:
-   - offers to install what is missing (.NET 10 SDK, Node.js, Java) with winget,
-   - asks for the game folder (the one with `ro3.exe`),
-   - exports the game data from your client (5-10 minutes, only once),
-   - starts the server in its own window and then the game.
+You need only the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). `start.cmd` builds the server, the
+client DLLs and RO3Emu from source and runs RO3Emu with this repository as its home; `join.cmd <address>` does the
+same for joining, and both take any RO3Emu.exe option. On Linux, `./server.sh` builds and runs the server from source.
 
-Log in with any account name and password: a new account is created on first login. Next time, `start.cmd` goes
-straight to the game. Close the server window to stop the server.
-
-> [!NOTE]
-> The client does not connect anywhere until it is patched; `start.cmd` and `join.cmd` patch it every time they run.
-> The original files are kept in `ro3emu-backup` inside the game folder. If the game's own launcher repairs or
-> updates the client, just run `start.cmd` again. After a game update, delete that `ro3emu-backup` folder first.
-
-### Host a server for friends (Linux)
-
-Most servers run on Linux. Copy the game folder from Windows to the server (at least `ro3_Data/StreamingAssets`),
-download this project there and run:
+The same steps by hand:
 
 ```bash
-./server.sh --client ~/ROO_PC --host 203.0.113.10 --gm myaccount --service
-```
-
-- `--host` is the address players connect to: the server's public IP.
-- `--gm` names an account that gets GM commands in game.
-- `--service` installs a systemd service that starts with the machine. Leave it out to run in the terminal.
-
-The script installs .NET 10 into `~/.dotnet`, offers to install Node.js and Java with apt or dnf, exports the game data
-once, builds and starts the server. Open TCP ports `5380`, `20000` and `33100`. After a client update, run it again
-with `--reexport`.
-
-### Join a server (Windows)
-
-Players install the game, download this project and **double-click `join.cmd`**: it asks for the game folder and the
-server's address, then patches and starts the game.
-
-### Troubleshooting
-
-| Problem | What to do |
-|---|---|
-| `literal not found (different client build?)` | Your client is a different build than the one this project supports (`Build 140054`). Open an issue with the build number from the login screen. |
-| The game shows the official login or cannot connect | Run `start.cmd` or `join.cmd` again: the game's own launcher undid the patch. |
-| The server window shows an error | Copy it into an [issue](https://github.com/aethai/ro3emu-server/issues/new/choose). |
-| Players cannot connect to a Linux server | Check `--host` (the public address) and the three open ports. |
-
-### Manual setup (developers)
-
-The server runs on **Windows and Linux**. The client is a Windows game, so patching the client and playing happen on
-Windows; the commands below use PowerShell there. Building the server alone needs no game files, but a playable setup
-needs your own RO3 PC client, exported game data and client hooks built against that client's DLLs.
-
-#### Prerequisites
-
-| Software | Used for |
-|---|---|
-| [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | server, tools, tests |
-| [Node.js 20+](https://nodejs.org/) | export scripts in `tools/` |
-| Java 17+ and [unluac](https://sourceforge.net/projects/unluac/files/Unstable/) `unluac_2025_12_23.jar` (saved as `unluac.jar` in the repository root) | decompiling the client's Lua (data export only) |
-| Windows 10/11 x64 | the client, data export, client hooks and patching |
-| Linux x64 (optional) | hosting the server; the test suite runs there in CI |
-| The Ragnarok Online 3 PC client (`ROO_PC`) | your own copy; nothing from the game is distributed here |
-
-Clone the repository and work from its root:
-
-```powershell
-git clone https://github.com/aethai/ro3emu-server.git
-Set-Location ro3emu-server
-dotnet build src/Ro3Emu.Server/Ro3Emu.Server.csproj -c Release
-```
-
-Set `RO3_CLIENT_DIR` to your client folder (the one with `ro3.exe`). The client hooks build against its managed DLLs
-and several tools read its files from there:
-
-```powershell
-$env:RO3_CLIENT_DIR = 'C:\RO3\ROO_PC'
-Test-Path (Join-Path $env:RO3_CLIENT_DIR 'ro3.exe') # should print True
-```
-
-#### 1. Export the game data
-
-Game data comes from your client and never goes into git (`data/` and `re/` are ignored).
-
-```powershell
-# Lua: the client's obfuscated chunks to standard Lua 5.4 bytecode, then to source
-dotnet run --project tools/LuaDecode -c Release -- (Join-Path $env:RO3_CLIENT_DIR 'ro3_Data/StreamingAssets/Recovery/LuaPayload') re/clientB/luac
-javac -cp unluac.jar -d tools/unluac-batch tools/unluac-batch/BatchUnluac.java
-java -cp "unluac.jar;tools/unluac-batch" BatchUnluac re/clientB/luac re/clientB/lua-src
-
-# Config tables, scene editor data, walkability grids, message names
-dotnet run --project tools/ConfigExport -c Release -- re/clientB/luac data/config
-dotnet run --project tools/ConfigExport -c Release -- re/clientB/luac data/config Localization_en.luac
-dotnet run --project tools/ConfigExport -c Release -- re/clientB/luac data/sceneeditor 'Config\SceneEditor'
-node tools/WorldData/navexport.js data/nav
-node tools/msgtable.js re/clientB/lua-src data/msgtable.tsv
-```
-
-`data/config` holds the config tables (items, jobs, maps...) and the English texts (`Localization_en.json`), `data/sceneeditor` map points, NPCs and portals,
-`data/nav` the walkability grids and `data/msgtable.tsv` the message names. Without them the server still starts but
-knows no items, NPCs or maps. Check the exporter counts and `re/clientB/lua-src/_failures.tsv` before starting; the
-decompiler can report failed files. Code comments cite the decompiled client as `re/clientB/lua-src/...`.
-
-#### 2. Run the server
-
-```powershell
+# game data from your client into data/ (config, scene editor, skills, nav, message table, English texts)
+dotnet run --project src/Ro3Emu.Setup -c Release -- export C:\Games\ROO_PC data
+# the server: HTTP 5380, micro gate 20000, game gate 33100, all on loopback; data/ holds its keys and database
 dotnet run --project src/Ro3Emu.Server -c Release
+# the client against it (originals kept in <client>\ro3emu-backup; "restore <client>" undoes it)
+dotnet run --project src/Ro3Emu.ClientTools -- play C:\Games\ROO_PC http://127.0.0.1:5380
 ```
 
-The first start creates the gate key pair (`data/gate_rsa_*.pem`) and the database (`data/ro3emu.db`). Defaults:
-HTTP / SDK `5380`, micro gate `20000`, game gate `33100`, all on loopback.
+The export runs the client's own Lua bytecode in a Lua 5.4 VM and reads its file system directly
+(`src/Ro3Emu.DataExport`); no decompiler is involved. To read the client's Lua yourself, `tools/LuaDecode` turns its
+chunks into standard Lua 5.4 bytecode for any decompiler.
 
-#### Running the server on Linux
+### Repository layout
 
-Export `data/` on Windows as in step 1, then copy it to the Linux machine. With the
-[.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) installed there:
+| Path | What |
+|---|---|
+| `src/Ro3Emu.Server` | the server: HTTP, micro gate, game gate, game loop, services, SQLite stores |
+| `src/Ro3Emu.Setup` | RO3Emu.exe: finds or installs the game, exports data, runs the server, patches the client |
+| `src/Ro3Emu.DataExport` | game data export from the client (Lua VM, file system, nav meshes, English text map) |
+| `src/Ro3Emu.ClientTools` | client patcher (patch, restore, play; the chat and voice redirects) and patch-repository releases |
+| `src/Ro3Emu.ClientHooks` · `src/Ro3Emu.Loc` | code injected into the client: Lua patches, party voice and the English text layer |
+| `src/Ro3Emu.Bot` · `src/Ro3Emu.BotCli` | a scripted client speaking the real protocol (tests, load, extra players) |
+| `src/Ro3Emu.LoadTest` | load runner: scenarios S1-S5 with protocol bots |
+| `src/Ro3Emu.Launcher` · `src/Ro3Emu.Patcher` | a player launcher and its content-addressed update engine |
+| `tests/` | end-to-end tests: the server in-process, bots over real sockets |
+| `tools/` | Lua, config, nav and message-table export, release scripts |
+| `docs/` | guides, system notes, client research |
 
-```bash
-git clone https://github.com/aethai/ro3emu-server.git
-cd ro3emu-server
-dotnet publish src/Ro3Emu.Server -c Release -o /srv/ro3emu/bin
-# copy the exported data/ to /srv/ro3emu/data
-```
-
-A published server looks for `data/` next to its binary, so point it at the copy. A systemd unit such as
-`/etc/systemd/system/ro3emu.service`:
-
-```ini
-[Unit]
-Description=RO3Emu server
-After=network.target
-
-[Service]
-User=ro3emu
-WorkingDirectory=/srv/ro3emu
-ExecStart=/srv/ro3emu/bin/Ro3Emu.Server
-Environment=ASPNETCORE_ENVIRONMENT=Production
-Environment=Ro3Emu__DataDir=/srv/ro3emu/data
-Environment=Ro3Emu__PublicHost=203.0.113.10
-Environment=Ro3Emu__GmAccounts__0=your-admin-login
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Replace `203.0.113.10` with the address players reach and open TCP `5380`, `20000` and `33100`. Then
-`systemctl daemon-reload` and `systemctl enable --now ro3emu`. Players patch their Windows client against that address
-as described in [Playing together](#playing-together); `tools/run-server.ps1` is the Windows equivalent of the unit.
-
-#### 3. Patch and start the client
+### Tests
 
 ```powershell
-dotnet run --project src/Ro3Emu.ClientTools -- patch $env:RO3_CLIENT_DIR http://127.0.0.1:5380 data/gate_rsa_public.pem
-dotnet run --project src/Ro3Emu.ClientTools -- launch $env:RO3_CLIENT_DIR
+dotnet test tests/Ro3Emu.Tests -c Release --filter "Category!=Slow"   # server: real server, bots over sockets
+dotnet test tests/Ro3Emu.Setup.Tests -c Release                         # RO3Emu.exe, data export, installer
+dotnet test tests/Ro3Emu.Patcher.Tests -c Release                       # update engine
 ```
 
-Originals are kept in `<client>\ro3emu-backup`; `restore <client dir>` undoes the patch. Any account name and password
-works: unknown accounts are created on first login.
+Tests of content need the exported `data/` and are skipped without it; tests of rules (persistence, retries,
+ownership, logins) run on a small invented data set in `tests/Ro3Emu.Tests/Fixtures/GameData`, so CI runs them too
+([docs/guide/testing.md](docs/guide/testing.md)). CI runs all three suites on Linux on every push. The suite runs as if the machine were in UTC+08, so results don't depend on where it runs
+(`RO3EMU_TEST_HOST_TZ=<zone id>` picks another zone, `host` keeps the real one).
 
-> [!WARNING]
-> Do not run the official launcher's Verify / Repair on a patched client: it puts the original DLLs back.
-
-**Images with baked-in Chinese text.** The hooks can swap client textures for English versions, but no images are
-shipped. Render your own with `tools/ClientTextures/render.ps1` from a texture dump of your client and put the PNGs in
-`src/Ro3Emu.ClientHooks/Textures/`.
-
-## Playing together
-
-**Server machine**
-
-1. Set `Ro3Emu:PublicHost` in `src/Ro3Emu.Server/appsettings.json` to the address players reach (LAN or public IP
-   literal) and open TCP `5380`, `20000` and `33100`. A loopback `PublicHost` binds loopback only; behind NAT forward the
-   ports and keep the public IP as `PublicHost`. `Ro3Emu:BindAddress` overrides the listening interface.
-2. Start it with `tools/run-server.ps1` (restarts on exit, logs to `data/logs/`). The database is backed up to
-   `data/backups/` at start and every 6 hours (newest 20 kept). Who is online: `http://127.0.0.1:5380/ro3emu/online`
-   (server machine only).
-
-**Players** need the client and either the single-exe tool or a launcher:
+### Load tests
 
 ```powershell
-dotnet publish src/Ro3Emu.ClientTools -c Release -r win-x64 -o dist
-$serverUrl = 'http://192.168.1.10:5380' # replace with your server's reachable address
-./dist/Ro3Emu.ClientTools.exe play $env:RO3_CLIENT_DIR $serverUrl
+dotnet run -c Release --project src/Ro3Emu.LoadTest -- --scenario S2 --server-local --bots 300 --duration-seconds 600 --output .loadtest/s2
 ```
 
-`play` downloads the server's gate key, patches the client and starts it. For a real player base, host a patch
-repository and hand out `Ro3Emu.Launcher` instead: it installs the client, keeps it updated and starts it
-([`docs/guide/launcher.md`](docs/guide/launcher.md)).
+S1 is a login storm (500 logins in 60 s), S2 300 players in one town, S3 500 players in a mixed economy with a ledger
+check, S4 map changes and relogs, S5 a full castle siege (two guilds of 80). Each report marks every target (tick p99,
+reply latency, login time, players per view, database work on the loop, GC, CPU, memory) as PASS, FAIL or NOT MEASURED
+with the evidence.
 
-One account is one live session: a second login kicks the older connection. The client allows one instance per machine;
-`Ro3Emu.BotCli` stands in for more players when testing alone.
+### Releases
 
-GM commands (`!help` in chat) are enabled per account with `Ro3Emu:GmAccounts`; with the list empty, a server started
-as Production gives GM to nobody ([`docs/guide/gm-access.md`](docs/guide/gm-access.md)). Players report bugs with the
-menu's Feedback button or `/bug <text>` in chat ([`docs/guide/feedback.md`](docs/guide/feedback.md)).
+`pwsh tools/release/pack.ps1` builds both archives (self-contained, single file) and fails if anything from the game
+would ship. `pwsh tools/release/smoke.ps1` then tests the zip as a stranger would: a fresh folder, a copy of the
+client, no .NET, Java or Node on the PATH, export, server, patch, a bot logging in, join, restore. CI has no game
+client, so a tag build uses the committed `prebuilt/client` DLLs: refresh them with
+`pack.ps1 -UpdatePrebuiltClientDlls` whenever `src/Ro3Emu.ClientHooks` or `src/Ro3Emu.Loc` change.
 
-## Architecture
+### Architecture
 
 ```mermaid
 flowchart LR
@@ -296,79 +248,34 @@ flowchart LR
   O --> C
 ```
 
-- **One game loop.** All game state is owned by one thread with a 50 ms tick; network readers only parse and enqueue.
-  Await continuations come back to the loop, so services need no locks of their own. The loop drains admitted work on
-  shutdown instead of dropping it.
-- **Persistence off the loop.** Stores hand immutable plans to a single writer thread (one transaction per plan) and a
-  small read pool.
-- **Visibility.** A per-scene grid, directed views capped at the client's own limit, nearest first and rebalanced once
-  a second; beyond the cap the client gets name boards. Broadcasts are serialized once and shared; compression and
-  encryption stay per connection.
-- **Map lines.** Public maps open a second line at the configured soft cap and close empty lines.
-- **Observable load behavior.** `/ro3emu/metrics` (loopback only) exposes tick, queue, ticker and per-message costs and
-  DB statements by thread and call site. `Ro3Emu.LoadTest` drives protocol bots and writes measured reports; run it
-  against your own build and environment before drawing capacity conclusions.
-
-## Development
-
-| Path | What |
-|---|---|
-| `src/Ro3Emu.Server` | the server: HTTP, micro gate, game gate, game loop, services, SQLite stores |
-| `src/Ro3Emu.Bot` · `Ro3Emu.BotCli` | a scripted client speaking the real protocol (tests, load, extra players) |
-| `src/Ro3Emu.LoadTest` | load runner: scenarios S1-S5 with protocol bots, reports against fixed targets |
-| `src/Ro3Emu.ClientTools` | patch / restore / launch the client, `play` for players, `release` for patch repositories |
-| `src/Ro3Emu.ClientHooks` · `Ro3Emu.Loc` | in-client hooks (chat, Lua patches, texture swaps) and the English text layer |
-| `src/Ro3Emu.Launcher` · `Ro3Emu.Patcher` | the player launcher and its content-addressed update engine |
-| `tests/` | end-to-end tests: the server in-process, bots over real sockets |
-| `tools/` | Lua, config, nav, proto and message-table export, localization pipeline, economy probe |
-| `docs/` | guides, per-system notes and client research |
-
-### Tests
-
-```powershell
-dotnet test tests/Ro3Emu.Patcher.Tests/Ro3Emu.Patcher.Tests.csproj -c Release
-dotnet test tests/Ro3Emu.Tests/Ro3Emu.Tests.csproj -c Release --filter "Category!=Slow"
-```
-
-The patcher tests run without client data. The server integration tests start a real server on free loopback ports
-and talk to it through bots, covering wire format, flow and persistence. Most of them need the exported `data/`;
-without it they are skipped, and the rest still run. CI runs both suites on Linux on every push (`tests.yml`).
-
-### Load tests
-
-```powershell
-dotnet run -c Release --project src/Ro3Emu.LoadTest -- --scenario S2 --server-local --bots 300 --duration-seconds 600 --output .loadtest/s2
-```
-
-| Scenario | What it stresses |
-|---|---|
-| S1 | login storm: 500 logins in 60 s |
-| S2 | 300 players in one town walking and chatting |
-| S3 | 500 players in a mixed economy: trade, stalls, shops, mail, gathering, towers; ledger check |
-| S4 | map changes and relogs under background load |
-| S5 | a full castle siege: two guilds of 80 fighting in one instance |
-
-Each report lists every target (tick p99, reply latency, login time, players per view, DB I/O on the loop, GC, CPU,
-memory) as PASS / FAIL / NOT MEASURED with the evidence.
+- **One game loop** owns all game state on a 50 ms tick; network readers only parse and queue, so services need no
+  locks of their own.
+- **Persistence off the loop:** stores hand immutable plans to a single writer thread, one transaction per plan.
+  Activity rewards are settled through durable payout obligations ([docs](docs/systems/durable-settlement.md)).
+- **Visibility:** a grid per scene, views capped at the client's own limit, nearest players first; broadcasts are
+  serialized once and shared.
+- **Map lines:** busy public maps open more channels and close empty ones.
+- **Metrics:** `/ro3emu/metrics` (loopback only) shows tick, queue and per-message costs and database work by call
+  site.
 
 ### Contributing
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for build checks, evidence rules and
-what to include in a report or proposed change.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the build checks, the evidence rules and
+what to include in a report or a change. Thanks to everyone who has sent fixes so far.
 
 ## Documentation
 
-- [`docs/guide/`](docs/guide): running a server: GM access, open content, feedback, launcher and patch repository
-- [`docs/systems/`](docs/systems): how each system is implemented and which choices are inferred
-- [`docs/research/`](docs/research): client evidence behind the protocol and rules
+- [`docs/guide/`](docs/guide): running a server (GM access, open content, feedback, launcher)
+- [`docs/systems/`](docs/systems): how each system works and which rules are inferred
+- [`docs/research/`](docs/research): the client evidence behind the protocol and rules
 
 ## License
 
-RO3Emu is free software, licensed under the [GNU General Public License v3.0](LICENSE).
+RO3Emu is free software under the [GNU General Public License v3.0](LICENSE).
 
 ## Disclaimer
 
 RO3Emu is an independent research and interoperability project. It is not affiliated with or endorsed by Gravity or
-any publisher of Ragnarok Online. It does not include or distribute the game client, its data or its art; you need
-your own copy, and you are responsible for using it in line with the applicable laws and license terms. Ragnarok
-Online is a trademark of Gravity Co., Ltd.
+any publisher of Ragnarok Online. It does not include or distribute the game client, its data or its art; you need your
+own copy, and you are responsible for using it in line with the applicable laws and license terms. Ragnarok Online is a
+trademark of Gravity Co., Ltd.
