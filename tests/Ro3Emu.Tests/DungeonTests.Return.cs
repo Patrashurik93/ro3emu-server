@@ -103,8 +103,8 @@ public sealed partial class DungeonTests
             Assert.DoesNotContain(alice.Inbox.Snapshot(), packet => packet.IsGame(WorldCoreService.ReliveItem));
             Assert.Equal(before - 1, Items(alice, 1112001));
         }
-        await app.StopAsync();
-        await app.DisposeAsync();
+        await _app.StopAsync();
+        await _app.DisposeAsync();
         SqliteConnection.ClearAllPools();
         await InitializeAsync();
         await using var recovered = await InWorld("Alice", create: false);
@@ -146,6 +146,37 @@ public sealed partial class DungeonTests
         await alice.DisposeAsync();
         await using var reconnect = await InWorld("Alice", create: false);
         Assert.Equal(before - 1, Items(reconnect, 1112001));
+    }
+
+    [ClientDataFact]
+    public async Task PaidReviveDetachedDuringPublicationDoesNotFault()
+    {
+        await using var alice = await InWorld("Alice");
+        ChangeRow("MapConfig", RoleStore.SpawnSceneEntry.ToString(System.Globalization.CultureInfo.InvariantCulture), row => row["_kItemRevive"] = new JsonArray(1112001, 1));
+        await Gm(alice, "!item 1112001 2");
+        var session = Session(alice);
+        var role = session.Role;
+        long before = Items(alice, 1112001);
+        await OnLoop(async () =>
+        {
+            await Service<CharacterService>().SetHpSpAsync(session, 0, 0);
+            session.Dead = true;
+        });
+        var combat = Service<CombatService>();
+        // RoleHandover.cs:100 clears Role while PublishReviveAsync is still awaiting its packets.
+        combat.ReviveBroadcastedForTest = s => { s.Role = null; return Task.CompletedTask; };
+        try { await OnLoop(() => Service<WorldCoreService>().ItemReviveAsync(session)); }
+        finally
+        {
+            await OnLoop(() =>
+            {
+                combat.ReviveBroadcastedForTest = null;
+                session.Role = role;
+                return Task.CompletedTask;
+            });
+        }
+        Assert.False(session.Dead);
+        Assert.Equal(before - 1, Items(alice, 1112001));
     }
 
     [ClientDataFact]
@@ -269,7 +300,7 @@ public sealed partial class DungeonTests
             await OnLoop(() => Service<InstanceService>().AbandonAsync(room, session)).WaitAsync(Wait);
             Assert.True(room.Closed);
             Assert.False(room.PendingDone.Task.IsCompleted);
-            var stopping = app.StopAsync();
+            var stopping = _app.StopAsync();
             Assert.False(stopping.IsCompleted);
             release.TrySetResult();
             Assert.Null(await spawn!.WaitAsync(Wait));
@@ -307,7 +338,7 @@ public sealed partial class DungeonTests
     }
 
     [ClientDataTheory]
-    [InlineData(false, 1022001L, 5300001, 10101L)]
+    [InlineData(false, 1021851L, 5000025, 10101L)] // Eastern Payon: its elite Mandragora at entry
     [InlineData(true, Scene, Boss, RoleStore.SpawnSceneEntry)]
     public async Task LethalDungeonHitReturnsAliveThrough30402AfterDeathPublication(
         bool multi, long dungeonScene, int npc, long outside)
@@ -392,7 +423,7 @@ public sealed partial class DungeonTests
         Assert.Empty(session.Dungeons!.Records);
         await alice.SendGameAsync(DungeonService.Leave, new LeaveDungeonReq());
         Assert.Equal(ErrorCodes.SceneMissing, (await Next(alice, DungeonService.Leave, LeaveDungeonRsp.Parser)).Result);
-        clock.Advance(TimeSpan.FromSeconds(10));
+        _clock.Advance(TimeSpan.FromSeconds(10));
         await alice.SendGameAsync(CombatService.Relive, new EntityReliveReq());
         Assert.Equal(ErrorCodes.TargetAlive, (await Next(alice, CombatService.Relive, EntityReliveAck.Parser)).Result);
     }
@@ -540,7 +571,7 @@ public sealed partial class DungeonTests
         }
 
         await MovePublic(bob, RoleStore.SpawnSceneEntry);
-        clock.Advance(TimeSpan.FromSeconds(2)); // WorldCore's queued-admission tick uses this host's manual clock.
+        _clock.Advance(TimeSpan.FromSeconds(2)); // WorldCore's queued-admission tick uses this host's manual clock.
         if (mode == 1)
             await OnLoop(async () => Assert.True(await Service<SceneService>().EnterSceneAsync(session, izlude)));
         else
@@ -619,7 +650,7 @@ public sealed partial class DungeonTests
             return Task.CompletedTask;
         });
         await MovePublic(bob, RoleStore.SpawnSceneEntry); // one place opens for the first queued member
-        clock.Advance(TimeSpan.FromSeconds(2));
+        _clock.Advance(TimeSpan.FromSeconds(2));
         try
         {
             await entered.Task.WaitAsync(Wait); // AdmitQueuedAsync already holds Carol's old snapshot entry
@@ -649,7 +680,7 @@ public sealed partial class DungeonTests
         Assert.True(carolSession.Dead);
         if (replace)
         {
-            clock.Advance(TimeSpan.FromSeconds(2));
+            _clock.Advance(TimeSpan.FromSeconds(2));
             await Next(carol, WorldCoreService.SceneQueue, SceneQueuingRes.Parser, q => q.LineOrder == 0);
         }
         else

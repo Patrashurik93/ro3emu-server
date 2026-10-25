@@ -16,11 +16,11 @@ namespace Ro3Emu.Tests;
 public sealed class DraculaWeddingTests : IAsyncLifetime
 {
     private const long Home = GuildHomeService.DefaultScene, Lair = DraculaWeddingService.Lair;
-    private readonly string dir = Path.Combine(Path.GetTempPath(), "ro3emu-dracula-" + Guid.NewGuid().ToString("N"));
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "ro3emu-dracula-" + Guid.NewGuid().ToString("N"));
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(8);
-    private readonly TestClock clock = new();
-    private WebApplication app = null!;
-    private string http = "";
+    private readonly TestClock _clock = new();
+    private WebApplication _app = null!;
+    private string _http = "";
 
     /// <summary>
     /// Tuesday 2026-10-06 12:00 UTC, outside any occurrence; the flows open one with the !dracula test aid (the realm's
@@ -28,41 +28,41 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
     /// </summary>
     private sealed class TestClock : TimeProvider
     {
-        private long seconds = new DateTimeOffset(2026, 10, 6, 12, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(Interlocked.Read(ref seconds));
+        private long _seconds = new DateTimeOffset(2026, 10, 6, 12, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+        public override DateTimeOffset GetUtcNow() => DateTimeOffset.FromUnixTimeSeconds(Interlocked.Read(ref _seconds));
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
-        public void Advance(long count) => Interlocked.Add(ref seconds, count);
+        public void Advance(long count) => Interlocked.Add(ref _seconds, count);
     }
 
     public async Task InitializeAsync()
     {
         var (web, micro, game) = TestPorts.FreePorts();
-        app = ServerHost.Create([], o =>
+        _app = ServerHost.Create([], o =>
         {
-            o.DataDir = dir; o.GameDataDir = Path.Combine(ClientData.RepoRoot, "data");
+            o.DataDir = _dir; o.GameDataDir = Path.Combine(ClientData.RepoRoot, "data");
             o.HttpPort = web; o.MicroGatePort = micro; o.GameGatePort = game;
             o.SeasonStart = "2026-10-05"; o.PlayBook = 101;
-        }, clock);
-        SureHitRolls.Install(app); // lethal hits are prepared; a FLEE miss would only be noise
+        }, _clock);
+        SureHitRolls.Install(_app); // lethal hits are prepared; a FLEE miss would only be noise
         Service<DraculaWeddingService>().Lottery = TimeSpan.Zero;
-        await app.StartAsync();
-        http = $"http://127.0.0.1:{web}";
+        await _app.StartAsync();
+        _http = $"http://127.0.0.1:{web}";
     }
 
     public async Task DisposeAsync()
     {
-        await app.StopAsync(); await app.DisposeAsync();
+        await _app.StopAsync(); await _app.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        try { Directory.Delete(dir, true); } catch (IOException) { }
+        try { Directory.Delete(_dir, true); } catch (IOException) { }
     }
 
-    private T Service<T>() where T : notnull => app.Services.GetRequiredService<T>();
+    private T Service<T>() where T : notnull => _app.Services.GetRequiredService<T>();
     private Task OnLoop(Func<Task> work) => Service<GameLoop>().InvokeAsync(work);
     private Task<T> Read<T>(Func<T> read) => Service<GameLoop>().InvokeAsync(() => Task.FromResult(read()));
 
     private async Task<BotClient> InWorld(string name)
     {
-        var bot = new BotClient(http, File.ReadAllText(Path.Combine(dir, "gate_rsa_public.pem")));
+        var bot = new BotClient(_http, File.ReadAllText(Path.Combine(_dir, "gate_rsa_public.pem")));
         await bot.LoginAsync(name.ToLowerInvariant(), "pw"); await bot.EnterGateAsync();
         await bot.EnterWorldAsync((await bot.CreateRoleAsync(name)).RoleBaseInfo.Id);
         await Gm(bot, "!lvl 99");
@@ -79,7 +79,7 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
     private async Task Gm(BotClient bot, string command)
     {
         using var client = new HttpClient();
-        (await client.PostAsync($"{http}/ro3emu/gm?account={bot.Account}", new StringContent(command))).EnsureSuccessStatusCode();
+        (await client.PostAsync($"{_http}/ro3emu/gm?account={bot.Account}", new StringContent(command))).EnsureSuccessStatusCode();
     }
 
     private GameSession Session(BotClient bot) => Service<SessionRegistry>().All().Single(s => s.Account == bot.Account && s.Role != null);
@@ -170,7 +170,7 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
         });
         var cast = await NormalAttackFixture.CastWhenReadyAsync(bot, actor.Uid);
         await Next(bot, CombatService.SkillHit, SkillHitInfo.Parser, hit => hit.Dsts.Any(d => d.DstID == actor.Uid && d.IsDead));
-            await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
+        await NormalAttackFixture.WaitForTailAsync(bot, cast.SessionId);
     }
 
     private static async Task<int> Interact(BotClient bot, DungeonService.SceneActorUnit actor, int interaction)
@@ -245,7 +245,7 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
 
         // The event opens: the lottery lands on one of the two members present; both get her entity, then the home story.
         await Gm(alice, "!dracula open");
-        clock.Advance(1);
+        _clock.Advance(1);
         var select = await Next(alice, DraculaWeddingService.SelectBride, GuildDraculaSelectBrideNtf.Parser);
         Assert.Contains(select.BridePlayerId, new[] { Id(alice), Id(bob) });
         Assert.Equal((ulong)select.BridePlayerId, select.BrideEntity.Uuid); // the lottery stops on uuid == member id
@@ -342,7 +342,7 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
         await CreateGuild(alice, "Late");
         await EnterHome(alice);
         await Gm(alice, "!dracula open");
-        clock.Advance(1);
+        _clock.Advance(1);
         var select = await Next(alice, DraculaWeddingService.SelectBride, GuildDraculaSelectBrideNtf.Parser);
         Assert.Equal(Id(alice), select.BridePlayerId);
         await Story(alice, Home, 3001);
@@ -350,7 +350,7 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
         await Load(alice, Lair);
         await Story(alice, Lair, 3003);
 
-        clock.Advance(30 * 60); // past the end of the (test) window
+        _clock.Advance(30 * 60); // past the end of the (test) window
         var complete = await Next(alice, DraculaWeddingService.WeddingComplete, GuildDraculaWeddingCompleteNtf.Parser);
         Assert.Equal(0, complete.WinCamp);
         Assert.Equal(0, complete.RescuerPlayerId);
@@ -358,5 +358,50 @@ public sealed class DraculaWeddingTests : IAsyncLifetime
         await Task.Delay(200);
         Assert.DoesNotContain(Mailbox(Id(alice)).Letters, l => l.TemplateId is 10208 or 10209);
         Assert.Equal(ErrorCodes.ActivityPeriod, await EnterLair(alice));
+    }
+
+    [ClientDataFact]
+    public async Task TheBrideSpectatesALairMemberThroughCameraCustomData()
+    {
+        await using var alice = await InWorld("Alice");
+        await using var bob = await InWorld("Bob");
+        long guild = await CreateGuild(alice, "Watch");
+        await Join(alice, bob, guild);
+        await EnterHome(alice);
+        await EnterHome(bob);
+        await Gm(alice, "!dracula open");
+        _clock.Advance(1);
+        long brideId = (await Next(alice, DraculaWeddingService.SelectBride, GuildDraculaSelectBrideNtf.Parser)).BridePlayerId;
+        var (bride, guest) = brideId == Id(alice) ? (alice, bob) : (bob, alice);
+        await Story(alice, Home, 3001);
+        await Story(bob, Home, 3001);
+        Assert.Equal(0, await EnterLair(bride));
+        await Load(bride, Lair);
+        Assert.Equal(0, await EnterLair(guest));
+        await Load(guest, Lair);
+        // The guest's arrival refreshes the Spectate widget's list (var 145).
+        var list = await Next(bride, DungeonService.Event, DungeonEventNotify.Parser,
+            e => e.Vars.Any(v => v.VarId == 145 && v.Vi64.Count == 2));
+        Assert.Equal(new[] { Id(alice), Id(bob) }.Order(), list.Vars.Single(v => v.VarId == 145).Vi64.Order());
+
+        static bool Camera(CustomDataChange c, long value) => c.CustomDatas.Any(d => d.Id == 1002 && d.CustomParam.LongParam == value);
+        // Only the bride watches, and only another member of her lair.
+        await guest.SendGameAsync(DraculaWeddingService.Watch, new DungeonWatchChangeTargetReq { PlayerId = brideId });
+        await bride.SendGameAsync(DraculaWeddingService.Watch, new DungeonWatchChangeTargetReq { PlayerId = 999999 });
+        await bride.SendGameAsync(DraculaWeddingService.Watch, new DungeonWatchChangeTargetReq { PlayerId = Id(guest) });
+        var watch = await Next(bride, WorldCoreService.CustomChange, CustomDataChange.Parser, c => c.CustomDatas.Any(d => d.Id == 1002));
+        Assert.Equal((ulong)brideId, (ulong)watch.EntityId);
+        Assert.True(Camera(watch, Id(guest)));
+        Assert.False(await Read(() => Session(guest).WorldState.CustomData.ContainsKey(1002)));
+        await bride.SendGameAsync(DraculaWeddingService.Watch, new DungeonWatchChangeTargetReq { PlayerId = -1 });
+        await Next(bride, WorldCoreService.CustomChange, CustomDataChange.Parser, c => Camera(c, 0));
+        Assert.False(await Read(() => Session(bride).WorldState.CustomData.ContainsKey(1002)));
+
+        // The watched guest leaves: nobody is left to watch, so the camera returns to the bride.
+        await bride.SendGameAsync(DraculaWeddingService.Watch, new DungeonWatchChangeTargetReq { PlayerId = Id(guest) });
+        await Next(bride, WorldCoreService.CustomChange, CustomDataChange.Parser, c => Camera(c, Id(guest)));
+        await guest.SendGameAsync(TowerService.LeaveDungeon, new LeaveDungeonReq());
+        await Next(bride, WorldCoreService.CustomChange, CustomDataChange.Parser, c => Camera(c, 0));
+        Assert.Equal(0, await Read(() => Session(bride).DungeonAttempt!.Dracula!.Watched));
     }
 }

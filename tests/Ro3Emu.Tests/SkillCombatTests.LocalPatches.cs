@@ -7,11 +7,46 @@ namespace Ro3Emu.Tests;
 public sealed partial class SkillCombatTests
 {
     [ClientDataFact]
+    public async Task NormalAttackDamageCannotBeRepeatedByCancellingItsActionTail()
+    {
+        await using var alice = await InWorld("Alice");
+        var target = await Target("alice", stationary: true);
+        var combat = _app.Services.GetRequiredService<CombatService>();
+        long readyMs = 0;
+        await Loop.InvokeAsync(async () =>
+        {
+            target.Hp = 1_000_000;
+            await combat.CastAsync(Session("alice"),
+                new CastSkillReq { SkillId = 1000001, TargetId = target.Uid });
+            var cast = Session("alice").SkillCast;
+            Assert.NotNull(cast);
+            readyMs = cast.StartMs + cast.ChantMs + cast.ActionMs;
+        });
+        var accepted = await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser);
+        Assert.Equal(0, accepted.Result);
+        var hit = await Next(alice, CombatService.SkillHit, SkillHitInfo.Parser,
+            x => x.SessionId == accepted.SessionId);
+        Assert.Contains(hit.Dsts, x => x.DstID == target.Uid && x.Damage > 0);
+        await Loop.InvokeAsync(async () =>
+        {
+            var session = Session("alice");
+            Assert.NotNull(session.SkillCast);
+            Assert.True(session.SkillCast.Resolved);
+            Assert.True(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() < readyMs);
+            await combat.InterruptAsync(session);
+            await combat.CastAsync(session,
+                new CastSkillReq { SkillId = 1000001, TargetId = target.Uid });
+        });
+        Assert.Equal(ErrorCodes.SkillCooldown,
+            (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+    }
+
+    [ClientDataFact]
     public async Task NormalAttackInterruptDoesNotResetCadenceAndAttackResumesAfterIt()
     {
         await using var alice = await InWorld("Alice");
         var target = await Target("alice", stationary: true);
-        var combat = app.Services.GetRequiredService<CombatService>();
+        var combat = _app.Services.GetRequiredService<CombatService>();
         int waitMs = 0;
         await Loop.InvokeAsync(async () =>
         {
@@ -39,7 +74,7 @@ public sealed partial class SkillCombatTests
     {
         await using var alice = await InWorld("Alice");
         await using var bob = await InWorld("Bob");
-        var functions = app.Services.GetRequiredService<FunctionService>();
+        var functions = _app.Services.GetRequiredService<FunctionService>();
         await Loop.InvokeAsync(() =>
         {
             Assert.False(functions.IsOpen(Session("alice"), 55));

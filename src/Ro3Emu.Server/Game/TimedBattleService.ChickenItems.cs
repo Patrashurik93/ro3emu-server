@@ -3,6 +3,7 @@ using Romsg;
 using Ro3Emu.Server.Data;
 using Ro3Emu.Server.Maps;
 using static Ro3Emu.Server.Game.ChickenRules;
+using Ro3Emu.Server.Data.Config;
 
 namespace Ro3Emu.Server.Game;
 
@@ -55,16 +56,20 @@ public sealed partial class TimedBattleService
         PickupNotify = 82642, ItemUpgrade = 82678, ItemUpgradeAll = 82679;
     /// <summary>Chest units: their own UID namespace below 2^53 (see DungeonService.SceneActorUidBase).</summary>
     private const long ChestUidBase = 1L << 48;
-    private static long chestSerial;
+    private long _chestSerial;
     /// <summary>(inferred) Bar slots: the client's InitChickenBar drops key 0, so slots start at 1.</summary>
     private const int MaxBarSlot = 10;
+    private const int EquipmentType = 3; // EatChickenItemConfig _iType 3: Weapon .. Ring (_iSubType 301-305)
     private const int ItemTypeItem = 1, ItemTypeSkill = 2, ItemTypeEquip = 3, ItemTypeCard = 5;
 
-    private int ItemType(int entry) => ItemRow(entry) is { } row ? (int)GameData.Int(row, "_iType") : 0;
+    /// <summary>NPCConfig _kName, the name a match NPC unit carries.</summary>
+    private string NpcName(JsonElement npc) => _data.TextOf(npc, "_kName");
+
+    private int ItemType(int entry) => ItemRow(entry) is { } row ? (int)new EatChickenItemConfig(row).Type : 0;
 
     private static long Weight(ChickenPlayer me, Func<int, long> weightOf) => me.Pack.Values.Sum(i => weightOf(i.Entry) * i.Stack);
     private long Weight(ChickenPlayer me) => Weight(me, ItemWeight);
-    private long ItemWeight(int entry) => ItemRow(entry) is { } row ? GameData.Int(row, "_iWeight") : 0;
+    private long ItemWeight(int entry) => ItemRow(entry) is { } row ? new EatChickenItemConfig(row).Weight : 0;
 
     /// <summary>How many of <paramref name="entry"/> fit: ChickenBagLimit weight and EatChickenItemConfig._iMaxQuantity
     /// (0 = no cap).</summary>
@@ -72,9 +77,9 @@ public sealed partial class TimedBattleService
     {
         if (ItemRow(entry) is not { } row || wanted <= 0) return 0;
         long fit = wanted;
-        long weight = GameData.Int(row, "_iWeight");
+        long weight = new EatChickenItemConfig(row).Weight;
         if (weight > 0) fit = Math.Min(fit, Math.Max(0, (BagLimit() - Weight(me)) / weight));
-        long cap = GameData.Int(row, "_iMaxQuantity");
+        long cap = new EatChickenItemConfig(row).MaxQuantity;
         if (cap > 0) fit = Math.Min(fit, Math.Max(0, cap - me.Pack.Values.Where(i => i.Entry == entry).Sum(i => (long)i.Stack)));
         return (int)Math.Max(0, fit);
     }
@@ -83,7 +88,7 @@ public sealed partial class TimedBattleService
     private List<ChickenItem> AddToPack(ChickenRun run, ChickenPlayer me, int entry, int amount, long ownerId = 0, string ownerName = "")
     {
         var touched = new List<ChickenItem>();
-        int limit = ItemRow(entry) is { } row ? (int)Math.Max(1, GameData.Int(row, "_iStackLimit")) : 1;
+        int limit = ItemRow(entry) is { } row ? (int)Math.Max(1, new EatChickenItemConfig(row).StackLimit) : 1;
         foreach (var stack in me.Pack.Values.Where(i => i.Entry == entry && i.OwnerId == ownerId && i.Stack < limit).ToArray())
         {
             if (amount <= 0) break;
@@ -137,7 +142,7 @@ public sealed partial class TimedBattleService
     private List<(int Entry, int Amount)> RollPool(Random rng, int pool)
     {
         var drops = new List<(int, int)>();
-        if (data.Row("EatChickenDropPoolConfig", pool) is not { } row) return drops;
+        if (_data.Row("EatChickenDropPoolConfig", pool) is not { } row) return drops;
         for (int n = 1; n <= 9; n++)
         {
             if (!row.TryGetProperty($"_iDropGroup_{n}", out var spec) || spec.ValueKind != JsonValueKind.Array || spec.GetArrayLength() < 2)
@@ -145,7 +150,7 @@ public sealed partial class TimedBattleService
             int group = (int)(GameData.Number(spec[0]) ?? 0), chance = (int)(GameData.Number(spec[1]) ?? 0);
             int rolls = spec.GetArrayLength() > 2 ? (int)(GameData.Number(spec[2]) ?? 1) : 1;
             int count = spec.GetArrayLength() > 3 ? (int)(GameData.Number(spec[3]) ?? 1) : 1;
-            if (rng.Next(10000) >= chance || data.Row("EatChickenDropGroupConfig", group) is not { } rows
+            if (rng.Next(10000) >= chance || _data.Row("EatChickenDropGroupConfig", group) is not { } rows
                 || rows.ValueKind != JsonValueKind.Array) continue;
             var choices = rows.EnumerateArray().Select(r => (Row: r, Weight: Math.Max(0, GameData.Int(r, "_iWeights")))).ToArray();
             long total = choices.Sum(c => c.Weight);
@@ -166,7 +171,7 @@ public sealed partial class TimedBattleService
 
     private void AddToChest(ChickenRun run, ChickenChestUnit chest, int entry, int amount, long ownerId = 0, string ownerName = "")
     {
-        int limit = ItemRow(entry) is { } row ? (int)Math.Max(1, GameData.Int(row, "_iStackLimit")) : 1;
+        int limit = ItemRow(entry) is { } row ? (int)Math.Max(1, new EatChickenItemConfig(row).StackLimit) : 1;
         foreach (var stack in chest.Items.Values.Where(i => i.Entry == entry && i.OwnerId == ownerId && i.Stack < limit).ToArray())
         {
             int add = Math.Min(amount, limit - stack.Stack);
@@ -184,15 +189,15 @@ public sealed partial class TimedBattleService
     private async Task<ChickenChestUnit?> SpawnChestAsync(Match match, ChickenRun run, int npcId, MapPoint at,
         Action<ChickenChestUnit> fill)
     {
-        if (data.Row("NPCConfig", npcId) is not { } npc) return null;
+        if (_data.Row("NPCConfig", npcId) is not { } npc) return null;
         var chest = new ChickenChestUnit
         {
-            Uid = ChestUidBase | Interlocked.Increment(ref chestSerial), SceneEntry = ChickenScene, InstanceId = match.Room!.Id,
-            X = at.X, Y = at.Y, Z = at.Z, Face = at.Face, NpcId = npcId, Name = data.TextOf(npc, "_kName"),
+            Uid = ChestUidBase | Interlocked.Increment(ref _chestSerial), SceneEntry = ChickenScene, InstanceId = match.Room!.Id,
+            X = at.X, Y = at.Y, Z = at.Z, Face = at.Face, NpcId = npcId, Name = NpcName(npc),
             Quality = BoxDrop.ContainsKey(npcId) && npcId < 15000600 ? npcId - 15000500 : 0, Wire = item => Wire(item),
         };
         fill(chest);
-        if (!await instances.AddPropAsync(match.Room, chest)) return null;
+        if (!await _instances.AddPropAsync(match.Room, chest)) return null;
         run.Chests.Add(chest);
         return chest;
     }
@@ -221,10 +226,10 @@ public sealed partial class TimedBattleService
         if (chest.Items.Count == 0)
         {
             run.Chests.Remove(chest);
-            if (match.Room != null) await instances.RemovePropAsync(match.Room, chest);
+            if (match.Room != null) await _instances.RemovePropAsync(match.Room, chest);
             return;
         }
-        await world.ToUnitViewersAsync(chest, CharacterService.EntityBaseChange, chest.Change());
+        await _world.ToUnitViewersAsync(chest, CharacterService.EntityBaseChange, chest.Change());
     }
 
     internal IReadOnlyList<ChickenChestUnit> ChestsForTest(GameSession session) =>
@@ -308,6 +313,13 @@ public sealed partial class TimedBattleService
     private async Task AfterPickupAsync(Match match, ChickenRun run, GameSession session, List<ItemBaseInfo> picked,
         IEnumerable<ChickenChestUnit> chests)
     {
+        var me = run.Players[session];
+        foreach (var info in picked)
+            if (ItemRow(info.ItemEntry) is { } row && new EatChickenItemConfig(row).Type == EquipmentType)
+            {
+                int quality = (int)new EatChickenItemConfig(row).Quality;
+                me.EquipQuality[quality] = me.EquipQuality.GetValueOrDefault(quality) + 1;
+            }
         await SyncRoundAsync(match, run, session);
         await session.SendGameAsync(PickupNotify, new PickChickenItemNotify { PickItems = { picked } });
         foreach (var chest in chests.Distinct().ToArray()) await ChestChangedAsync(match, run, chest);
@@ -346,7 +358,7 @@ public sealed partial class TimedBattleService
                 }
                 result = 0;
                 resp.NpcId = target?.Uid ?? 0;
-                if (equipChanged) await character.RefreshStatsAsync(session);
+                if (equipChanged) await _character.RefreshStatsAsync(session);
                 await SyncRoundAsync(match, run, session);
             });
         resp.Result = result;
@@ -392,15 +404,15 @@ public sealed partial class TimedBattleService
                     }
                     else
                     {
-                        long subType = ItemRow(item.Entry) is { } row ? GameData.Int(row, "_iSubType") : 0;
+                        long subType = ItemRow(item.Entry) is { } row ? new EatChickenItemConfig(row).SubType : 0;
                         foreach (var slot in me.EquipBar.Where(s => s.Value == item.Guid || me.Pack.TryGetValue(s.Value, out var worn)
-                                     && ItemRow(worn.Entry) is { } w && GameData.Int(w, "_iSubType") == subType).Select(s => s.Key).ToArray())
+                                     && ItemRow(worn.Entry) is { } w && new EatChickenItemConfig(w).SubType == subType).Select(s => s.Key).ToArray())
                             me.EquipBar.Remove(slot);
                         me.EquipBar[req.Index] = item.Guid;
                     }
                 }
                 result = 0;
-                if (equipChanged) await character.RefreshStatsAsync(session);
+                if (equipChanged) await _character.RefreshStatsAsync(session);
                 await SyncRoundAsync(match, run, session);
             });
         await session.SendGameAsync(InsertItem, new InsertChickenItemResp
@@ -435,7 +447,9 @@ public sealed partial class TimedBattleService
                 foreach (var (type, value) in effects.Where(e => e.Type == 203))
                     await ApplyItemBuffAsync(session, me, value, now);
                 RemoveFromPack(me, item.Guid, 1);
-                if (GameData.Int(row, "_iCd") is var cd and > 0) me.ItemCd[item.Entry] = now + cd * 1000;
+                int subType = (int)new EatChickenItemConfig(row).SubType;
+                me.UsedSubType[subType] = me.UsedSubType.GetValueOrDefault(subType) + 1;
+                if (new EatChickenItemConfig(row).Cd is var cd and > 0) me.ItemCd[item.Entry] = now + cd * 1000;
                 result = 0;
                 await SyncRoundAsync(match, run, session);
             });
@@ -459,9 +473,9 @@ public sealed partial class TimedBattleService
     /// </summary>
     private async Task ApplyItemBuffAsync(GameSession session, ChickenPlayer me, int buffId, long now)
     {
-        await buffs.AddAsync(session, buffId, 0, session.Role!.Id);
-        if (data.Row("BuffConfig", buffId) is not { } buff) return;
-        long perTick = PetCombatRules.AttributeAmount(buff, character.Stats(session), character.Stats(session));
+        await _buffs.AddAsync(session, buffId, 0, session.Role!.Id);
+        if (_data.Row("BuffConfig", buffId) is not { } buff) return;
+        long perTick = PetCombatRules.AttributeAmount(buff, _character.Stats(session), _character.Stats(session));
         if (perTick <= 0) return;
         long duration = Math.Max(1000, GameData.Int(buff, "_iTime"));
         await HealAsync(session, me, perTick);
@@ -471,11 +485,11 @@ public sealed partial class TimedBattleService
     private async Task HealAsync(GameSession session, ChickenPlayer me, long amount)
     {
         if (session.Dead || amount <= 0) return;
-        var stats = character.Stats(session);
+        var stats = _character.Stats(session);
         long before = stats[2000], after = Math.Min(stats[101], before + amount);
         if (after <= before) return;
         me.Cure += after - before;
-        await character.SetHpSpAsync(session, after, null);
+        await _character.SetHpSpAsync(session, after, null);
     }
 
     private async Task TickHealsAsync(Match match, ChickenRun run, long now)
@@ -525,7 +539,7 @@ public sealed partial class TimedBattleService
                 {
                     progress = false;
                     foreach (int entry in me.Pack.Values.Select(i => i.Entry).Distinct()
-                                 .OrderBy(e => ItemRow(e) is { } r ? GameData.Int(r, "_iQuality") : 0).ToArray())
+                                 .OrderBy(e => ItemRow(e) is { } r ? new EatChickenItemConfig(r).Quality : 0).ToArray())
                     {
                         long guid = UpgradeOnce(run, me, entry, out int one);
                         if (one != 0) continue;
@@ -542,8 +556,8 @@ public sealed partial class TimedBattleService
     private long UpgradeOnce(ChickenRun run, ChickenPlayer me, int entry, out int result)
     {
         result = ErrorCodes.Parameter;
-        if (ItemRow(entry) is not { } row || GameData.Int(row, "_iType") != ItemTypeSkill) return 0;
-        int next = (int)GameData.Int(row, "_iUpgradeItem"), need = (int)GameData.Int(row, "_iUpdateCount");
+        if (ItemRow(entry) is not { } row || new EatChickenItemConfig(row).Type != ItemTypeSkill) return 0;
+        int next = (int)new EatChickenItemConfig(row).UpgradeItem, need = (int)new EatChickenItemConfig(row).UpdateCount;
         if (next <= 0 || need <= 0 || ItemRow(next) == null) return 0;
         var copies = me.Pack.Values.Where(i => i.Entry == entry)
             .OrderBy(i => me.SkillBar.ContainsValue(i.Guid) ? 1 : 0).ToList();

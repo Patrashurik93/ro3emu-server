@@ -3,6 +3,7 @@ using System.Text.Json;
 using Romsg;
 using Ro3Emu.Server.Accounts;
 using Ro3Emu.Server.Data;
+using Ro3Emu.Server.Data.Config;
 using Ro3Emu.Server.Maps;
 
 namespace Ro3Emu.Server.Game;
@@ -29,14 +30,15 @@ namespace Ro3Emu.Server.Game;
 /// Not executed (no machinery or no data link): autocast skills (Bash, Jupitel Thunder, Divine Light), race-family
 /// damage (Orcs, Kobolds, ...: no monster family field), armor element changes, magic nullify/reflect, status
 /// immunities, Endure, cooldown reset, monster SP drain, Splash, Double Attack, detection, indestructible gear.
-/// Skill(3) grants (Hiding, Sightless Mind, Magnum Break ...) are not added to the 5025 skill list.
+/// Skill(3) grants (Heal, Disguise, Magnum Break, Envenom, Sight, Sightless Mind) go into RoleProgress.GrantedSkills.
 /// </summary>
 public sealed class CardEffects
 {
-    private readonly GameData data;
-    private readonly CharacterService character;
-    private readonly BuffService buffs;
-    private readonly ConditionalWeakTable<GameSession, Runtime> runtime = new();
+    private readonly GameData _data;
+    private readonly CharacterService _character;
+    private readonly BuffService _buffs;
+    private readonly SkillService _skills;
+    private readonly ConditionalWeakTable<GameSession, Runtime> _runtime = new();
 
     private sealed class Runtime
     {
@@ -47,17 +49,19 @@ public sealed class CardEffects
 
     private sealed record Passive(InvItem Card, int Id, JsonElement Row);
 
+    private const long SkillOp = 3;
     private const int LifeStealGroup = 20170, SpAbsorb = 2050401, SizeAlways = 20501, SizeChance = 20500;
 
     // A test can fix each ten-thousandth roll without changing the production probability.
     internal Func<int, int> Roll { get; set; } = bound => Random.Shared.Next(bound);
 
     public CardEffects(GameData data, CharacterService character, BuffService buffs, CardService cards, CombatService combat,
-        SceneService scenes)
+        SceneService scenes, SkillService skills)
     {
-        this.data = data;
-        this.character = character;
-        this.buffs = buffs;
+        this._data = data;
+        this._skills = skills;
+        this._character = character;
+        this._buffs = buffs;
         cards.SocketsChanged.Add(RefreshAsync);
         scenes.Loaded.Add(RefreshAsync);
         combat.DamageAdjusters.Add(AdjustDamage);
@@ -66,10 +70,10 @@ public sealed class CardEffects
 
     private IEnumerable<Passive> Passives(GameSession s)
     {
-        foreach (var (card, id) in EquipmentStunts.CardEffects(s, data))
-            if (data.Row("SpecialEffectConfig", id) is { } effect)
+        foreach (var (card, id) in EquipmentStunts.CardEffects(s, _data))
+            if (_data.Row("SpecialEffectConfig", id) is { } effect)
                 foreach (var op in EquipmentAffixes.Rows(effect, "_kSpecialEffect"))
-                    if (op.Length == 2 && op[0] == 2 && data.Row("BuffConfig", op[1]) is { } buff)
+                    if (op.Length == 2 && op[0] == 2 && _data.Row("BuffConfig", op[1]) is { } buff)
                         yield return new Passive(card, (int)op[1], buff);
     }
 
@@ -83,18 +87,18 @@ public sealed class CardEffects
     {
         if (s.Role == null) return;
         var wanted = Passives(s).Select(p => (Source: p.Card.Guid, p.Id)).ToHashSet();
-        var state = runtime.GetOrCreateValue(s);
+        var state = _runtime.GetOrCreateValue(s);
         bool statsChanged = false;
         foreach (var stale in s.Buffs.Where(b => b.IsPassive && !b.IsTotemOwned && !wanted.Contains((b.SourceId, b.ConfigId))).ToArray())
         {
             statsChanged |= stale.Changes.Count > 0;
             state.Registered.Remove((stale.SourceId, stale.ConfigId));
-            await buffs.RemoveAsync(s, stale);
+            await _buffs.RemoveAsync(s, stale);
         }
         foreach (var (source, id) in wanted)
         {
             if (s.Buffs.Any(b => b.IsPassive && !b.IsTotemOwned && b.SourceId == source && b.ConfigId == id)) continue;
-            await buffs.AddPassiveAsync(s, id, source, totemOwned: false);
+            await _buffs.AddPassiveAsync(s, id, source, totemOwned: false);
             if (s.Buffs.FirstOrDefault(b => b.IsPassive && !b.IsTotemOwned && b.SourceId == source && b.ConfigId == id) is not { } added)
                 continue;
             statsChanged |= added.Changes.Count > 0;
@@ -103,9 +107,29 @@ public sealed class CardEffects
                 s.BuffEffectCds[added.Guid] = readyAt;
             state.Registered[(source, id)] = added.Guid;
         }
+        await GrantSkillsAsync(s);
         if (!statsChanged) return;
-        if (s.SceneLoading) character.Refresh(s);
-        else await character.RefreshStatsAsync(s);
+        if (s.SceneLoading) _character.Refresh(s);
+        else await _character.RefreshStatsAsync(s);
+    }
+
+    /// <summary>SpecialEffectConfig op Skill(3) [3, SkillConfig row] (enum_SpecialEffectType.Skill): the socketed card grants
+    /// that row's group at its level while it stays socketed (Heal, Disguise, Magnum Break, Envenom, Sight, Sightless Mind;
+    /// _iSystemType 3, enum_SkillSystemType.CardSkill). The skill panel lists them as card skills and they can be loaded
+    /// and cast; the highest level of a group counts.</summary>
+    private async Task GrantSkillsAsync(GameSession s)
+    {
+        if (s.Progress is not { } progress) return;
+        Dictionary<int, int> granted = [];
+        foreach (var (_, id) in EquipmentStunts.CardEffects(s, _data))
+            if (SpecialEffectConfig.Get(_data, id) is { } effect)
+                foreach (var op in effect.SpecialEffect)
+                    if (op is [SkillOp, var row] && SkillConfig.Get(_data, row) is { SkillId: > 0 } skill)
+                        granted[(int)skill.SkillId] = Math.Max(granted.GetValueOrDefault((int)skill.SkillId), (int)skill.Level);
+        if (granted.Count == progress.GrantedSkills.Count && granted.All(g => progress.GrantedSkills.GetValueOrDefault(g.Key) == g.Value)) return;
+        progress.GrantedSkills.Clear();
+        foreach (var (group, level) in granted) progress.GrantedSkills[group] = level;
+        if (s.SkillPlans != null) await _skills.SyncAsync(s);
     }
 
     private static long[] Numbers(JsonElement row, string field) => row.TryGetProperty(field, out var list) && list.ValueKind == JsonValueKind.Array
@@ -129,7 +153,7 @@ public sealed class CardEffects
 
     private bool Ready(GameSession s, long family, long cooldownMs)
     {
-        var state = runtime.GetOrCreateValue(s);
+        var state = _runtime.GetOrCreateValue(s);
         long now = MonsterService.NowMs;
         lock (state)
         {
@@ -166,16 +190,16 @@ public sealed class CardEffects
                 if (desc.Length < 4 || Roll(10000) >= chance || !Ready(s, group, (long)(desc[3] * 1000))) continue;
                 long heal = Math.Min((long)desc[2], (long)Math.Floor(damage * desc[1] / 100));
                 if (heal <= 0) continue;
-                var stats = character.Stats(s);
-                await character.SetHpSpAsync(s, stats[2000] + heal, null);
+                var stats = _character.Stats(s);
+                await _character.SetHpSpAsync(s, stats[2000] + heal, null);
             }
-            else if (logic.Length == 3 && logic[0] == 0 && logic[2] > 0 && data.Row("BuffConfig", logic[1]) is not null)
+            else if (logic.Length == 3 && logic[0] == 0 && logic[2] > 0 && _data.Row("BuffConfig", logic[1]) is not null)
             {
                 // "has a @{1}% Chance to inflict a status for @{2} sec. Internal Cooldown: @{3} sec."
                 if (target.Dead || target.Hp <= 0) continue;
                 long cooldown = desc.Length >= 3 ? (long)(desc[2] * 1000) : 0;
                 if (Roll(10000) >= chance || !Ready(s, group, cooldown)) continue;
-                await buffs.ShowOnUnitAsync(target, (int)logic[1], (int)logic[2], s.Role.Id);
+                await _buffs.ShowOnUnitAsync(target, (int)logic[1], (int)logic[2], s.Role.Id);
             }
         }
         foreach (var passive in passives.Where(p => p.Id == SpAbsorb).DistinctBy(p => p.Id))
@@ -186,8 +210,8 @@ public sealed class CardEffects
             if (logic.Length < 1 || desc.Length < 2 || Roll(10000) >= logic[0]) continue;
             long sp = (long)Math.Floor(damage * desc[1] / 100);
             if (sp <= 0) continue;
-            var stats = character.Stats(s);
-            await character.SetHpSpAsync(s, null, stats[2001] + sp);
+            var stats = _character.Stats(s);
+            await _character.SetHpSpAsync(s, null, stats[2001] + sp);
         }
     }
 

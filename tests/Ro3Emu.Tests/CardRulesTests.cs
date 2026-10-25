@@ -15,38 +15,38 @@ public sealed class CardRulesTests : IAsyncLifetime
 {
     private const int Lunatic = 1420100, Dagger = 2010121;
     private static readonly TimeSpan Wait = TimeSpan.FromSeconds(5);
-    private readonly string dataDir = Path.Combine(Path.GetTempPath(), "ro3emu-card-rules-" + Guid.NewGuid().ToString("N"));
-    private WebApplication app = null!;
-    private string httpUrl = "";
+    private readonly string _dataDir = Path.Combine(Path.GetTempPath(), "ro3emu-card-rules-" + Guid.NewGuid().ToString("N"));
+    private WebApplication _app = null!;
+    private string _httpUrl = "";
 
     public async Task InitializeAsync()
     {
         var (http, micro, game) = TestPorts.FreePorts();
-        app = ServerHost.Create([], o =>
+        _app = ServerHost.Create([], o =>
         {
-            o.DataDir = dataDir;
+            o.DataDir = _dataDir;
             o.GameDataDir = Path.Combine(ClientData.RepoRoot, "data");
             o.HttpPort = http;
             o.MicroGatePort = micro;
             o.GameGatePort = game;
         });
-        await app.StartAsync();
-        httpUrl = $"http://127.0.0.1:{http}";
+        await _app.StartAsync();
+        _httpUrl = $"http://127.0.0.1:{http}";
     }
 
     public async Task DisposeAsync()
     {
-        await app.StopAsync();
-        await app.DisposeAsync();
+        await _app.StopAsync();
+        await _app.DisposeAsync();
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        try { Directory.Delete(dataDir, true); } catch (IOException) { }
+        try { Directory.Delete(_dataDir, true); } catch (IOException) { }
     }
 
-    private T Service<T>() where T : notnull => app.Services.GetRequiredService<T>();
+    private T Service<T>() where T : notnull => _app.Services.GetRequiredService<T>();
 
     private async Task<BotClient> InWorld(string name, bool create = true)
     {
-        var bot = new BotClient(httpUrl, File.ReadAllText(Path.Combine(dataDir, "gate_rsa_public.pem")));
+        var bot = new BotClient(_httpUrl, File.ReadAllText(Path.Combine(_dataDir, "gate_rsa_public.pem")));
         await bot.LoginAsync(name.ToLowerInvariant(), "pw");
         await bot.EnterGateAsync();
         long id = create ? (await bot.CreateRoleAsync(name)).RoleBaseInfo.Id : bot.Roles.Single().Id;
@@ -66,7 +66,7 @@ public sealed class CardRulesTests : IAsyncLifetime
     private async Task Gm(string account, string command)
     {
         using var http = new HttpClient();
-        (await http.PostAsync($"{httpUrl}/ro3emu/gm?account={account}", new StringContent(command))).EnsureSuccessStatusCode();
+        (await http.PostAsync($"{_httpUrl}/ro3emu/gm?account={account}", new StringContent(command))).EnsureSuccessStatusCode();
     }
 
     private Task<T> OnLoop<T>(Func<T> action) => Service<GameLoop>().InvokeAsync(() => Task.FromResult(action()));
@@ -209,6 +209,35 @@ public sealed class CardRulesTests : IAsyncLifetime
         Assert.Contains((209L, 100d), flashFlat);
         Assert.Contains((215L, 80d), flashFlat);
         Assert.Contains((221L, 12d), flashFlat);
+    }
+
+    // Card 1430601's SpecialEffect 11000001 is [[3, 2004001]] (enum_SpecialEffectType.Skill): Disguise, a card skill
+    // (_iSystemType 3). While socketed, its group 20040 is in the plan's skillAssigns at level 1, where the skill panel
+    // lists card skills, and it can be cast; unsocketed, it is gone.
+    [ClientDataFact]
+    public async Task ASocketedSkillCardGrantsItsCardSkill()
+    {
+        const int card = 1430601;
+        await using var alice = await InWorld("Alice");
+        var session = Session("Alice");
+        await Gm("alice", "!lvl 80");
+        await Gm("alice", $"!item {card} 1");
+        Assert.Equal(0, await Insert(alice, 6, 1, session.Items.Single(i => i.Entry == card).Guid));
+        await Eventually(() => session.Progress!.GrantedSkills.GetValueOrDefault(20040) == 1, "granted");
+        await Next(alice, SkillService.SkillDataSync, DBSkillDataIncrement.Parser,
+            m => m.SkillAssignPlans?.Inc?.Value.Any(p => p.SkillAssigns.ContainsKey(20040)) == true);
+
+        await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 2004001, Face = 0 });
+        Assert.Equal(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
+        await Eventually(() => session.Buffs.Any(b => b.ConfigId == 1500601), "camouflage");
+
+        await alice.SendGameAsync(CardService.SlotRemove, new EquipmentCardRemoveReq { EquipPos = (EquipGridType)6, SlotIndex = 1 });
+        Assert.Equal(0, (await Next(alice, CardService.SlotRemove, EquipmentCardRemoveResp.Parser)).Result);
+        await Eventually(() => session.Progress!.GrantedSkills.Count == 0, "revoked");
+        await OnLoop(() => { session.SkillCds.Clear(); session.SkillModeCds.Clear(); return 0; });
+        await Task.Delay(800);
+        await alice.SendGameAsync(CombatService.UseSkill, new CastSkillReq { SkillId = 2004001, Face = 0 });
+        Assert.NotEqual(0, (await Next(alice, CombatService.UseSkill, CastSkillRsp.Parser)).Result);
     }
 
     [ClientDataFact]

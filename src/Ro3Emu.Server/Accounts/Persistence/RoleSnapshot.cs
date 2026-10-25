@@ -65,7 +65,8 @@ public sealed class RoleSnapshots
 {
     // Columns read by RoleProgressReadPlan: a write of any of them, or of the "progress" part, stales progress.
     private static readonly HashSet<string> ProgressColumns = new(StringComparer.Ordinal)
-        { "career", "level", "job_level", "exp", "job_exp", "stats", "bonus_points", "currency", "starter_kit", "skills", "skill_bar" };
+        { "career", "level", "job_level", "exp", "job_exp", "stats", "bonus_points", "currency", "starter_kit", "skills", "skill_bar",
+          "paragon_level", "paragon_exp" };
 
     private sealed class Entry(RoleSnapshot snapshot)
     {
@@ -89,7 +90,7 @@ public sealed class RoleSnapshots
     private const int MaxPersisted = 65536, MaxInstalled = 4096;
 
     /// <summary>Test switch: every served value is also read from SQL and must be identical.</summary>
-    internal static bool VerifyAgainstSql { get; set; } = Environment.GetEnvironmentVariable("RO3EMU_SNAPSHOT_VERIFY") == "1";
+    internal static bool VerifyAgainstSql { get; } = Environment.GetEnvironmentVariable("RO3EMU_SNAPSHOT_VERIFY") == "1";
 
     /// <summary>Take before starting a snapshot read; pass to <see cref="Install"/>.</summary>
     internal long Sequence { get { lock (_gate) return _sequence; } }

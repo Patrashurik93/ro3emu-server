@@ -33,6 +33,9 @@ internal sealed class FamilyEconomyTransactionPlan(RoleItemPlan child, EconomyMu
             // The Odin statue of Valhalla Trials (cd13b/valhalla-pray): coins in, statue EXP and level out.
             "valhalla" => new HashSet<string>(["heroic_spirit", "library", "tasks", "task_runtime",
                 "task_followup"], StringComparer.Ordinal),
+            // Astral Level Star Cores (cd13b/paragon-*): a core installed leaves the bag, a removed one comes back.
+            "paragon" => new HashSet<string>(["paragon", "library", "tasks", "task_runtime",
+                "task_followup"], StringComparer.Ordinal),
             _ => throw new InvalidOperationException("Unknown converted C/D command kind.")
         };
     }
@@ -272,18 +275,19 @@ internal sealed class FamilyEconomyTransactionPlan(RoleItemPlan child, EconomyMu
         string family = mutation.CommandKind[6..].Split('-')[0];
         var reasons = CharacterFamilyEconomy.IsKind(mutation.CommandKind)
             ? CharacterFamilyEconomy.Reasons(mutation.CommandKind) : family switch
-        {
-            "pet" => (EconomyReason.PetCost,
-                mutation.CommandKind == "cd13b/pet-rebirth" ? EconomyReason.PetRefund : EconomyReason.PetGoods),
-            "mount" => (EconomyReason.MountCost, EconomyReason.MountGoods),
-            "wardrobe" => (EconomyReason.WardrobeCost, EconomyReason.WardrobeGoods),
-            "totem" => (EconomyReason.TotemCost,
-                mutation.CommandKind == "cd13b/totem-upgrade" ? EconomyReason.TotemRefund : EconomyReason.TotemGoods),
-            "emblem" => (EconomyReason.EmblemCost, EconomyReason.EmblemGoods),
-            "genre" => (EconomyReason.GenreCost, EconomyReason.GenreGoods),
-            "valhalla" => (EconomyReason.ValhallaCost, EconomyReason.ValhallaCost), // no goods: a goods leg is refused
-            _ => throw new InvalidOperationException("Unknown C/D 13b family.")
-        };
+            {
+                "pet" => (EconomyReason.PetCost,
+                    mutation.CommandKind == "cd13b/pet-rebirth" ? EconomyReason.PetRefund : EconomyReason.PetGoods),
+                "mount" => (EconomyReason.MountCost, EconomyReason.MountGoods),
+                "wardrobe" => (EconomyReason.WardrobeCost, EconomyReason.WardrobeGoods),
+                "totem" => (EconomyReason.TotemCost,
+                    mutation.CommandKind == "cd13b/totem-upgrade" ? EconomyReason.TotemRefund : EconomyReason.TotemGoods),
+                "emblem" => (EconomyReason.EmblemCost, EconomyReason.EmblemGoods),
+                "genre" => (EconomyReason.GenreCost, EconomyReason.GenreGoods),
+                "valhalla" => (EconomyReason.ValhallaCost, EconomyReason.ValhallaCost), // no goods: a goods leg is refused
+                "paragon" => (EconomyReason.ParagonCost, EconomyReason.ParagonGoods),
+                _ => throw new InvalidOperationException("Unknown C/D 13b family.")
+            };
         foreach (var asset in before.Keys.Select(x => x.Asset).Concat(after.Keys.Select(x => x.Asset))
             .Concat(costs.Keys).Concat(goods.Keys).Distinct().OrderBy(x => x.Kind).ThenBy(x => x.Id))
         {

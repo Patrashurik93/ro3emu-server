@@ -3,6 +3,7 @@ using Google.Protobuf;
 using Romsg;
 using Ro3Emu.Server.Accounts;
 using Ro3Emu.Server.Data;
+using Ro3Emu.Server.Data.Config;
 using Ro3Emu.Server.Maps;
 
 namespace Ro3Emu.Server.Game;
@@ -13,8 +14,14 @@ public sealed class AttackLoop
     public required MonsterUnit Target { get; init; }
     public required int SkillId { get; init; }
     public long NextSwingMs { get; set; }
-    public float StartX { get; init; }
-    public float StartZ { get; init; }
+    public float StartX { get; set; }
+    public float StartZ { get; set; }
+    /// <summary>Started while the player still walked: the stop that follows at once is where the loop really starts.</summary>
+    public bool StartedWalking { get; set; }
+    public long StartMs { get; init; }
+    /// <summary>The walk speed (m/s) and the last walk message when the loop started (CombatService.PlayerMoved).</summary>
+    public float ArrivalSpeed { get; init; }
+    public DateTime WalkFromUtc { get; init; }
 }
 
 /// <summary>
@@ -42,17 +49,17 @@ public sealed partial class CombatService : IGameTicker
     private const long RegenIntervalMs = 5000;         // PublicParamConfig.AutoRecoverInterval
     public const uint SkillCdUpdate = 31113;
 
-    private readonly World world;
-    private readonly MonsterService monsters;
-    private readonly CharacterService character;
-    private readonly SkillService skills;
-    private readonly SceneService scene;
-    private readonly BuffService buffs;
-    private readonly WorldData worldData;
-    private readonly SessionRegistry sessions;
-    private readonly GameData data;
-    private readonly GameLoop loop;
-    private readonly ILogger<CombatService> log;
+    private readonly World _world;
+    private readonly MonsterService _monsters;
+    private readonly CharacterService _character;
+    private readonly SkillService _skills;
+    private readonly SceneService _scene;
+    private readonly BuffService _buffs;
+    private readonly WorldData _worldData;
+    private readonly SessionRegistry _sessions;
+    private readonly GameData _data;
+    private readonly GameLoop _loop;
+    private readonly ILogger<CombatService> _log;
     /// <summary>The combat dice (hit, damage float, crit, effect procs). Tests whose subject is not chance swap in
     /// fixed rolls, so a prepared lethal basic attack cannot randomly miss (the "first swing missed" flaky class).</summary>
     internal CombatRolls Rolls { get; set; } = new();
@@ -71,19 +78,19 @@ public sealed partial class CombatService : IGameTicker
         internal readonly SemaphoreSlim Semaphore = new(1, 1);
         internal int Users;
     }
-    private readonly Dictionary<long, InstanceDeathGate> instanceDeathGates = new();
+    private readonly Dictionary<long, InstanceDeathGate> _instanceDeathGates = new();
     private sealed class LethalFinalization { internal int Started; }
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MonsterUnit, LethalFinalization>
-        finalizedLethalPublications = new();
+        _finalizedLethalPublications = new();
 
     private async Task FinalizeLethalPublicationAsync(MonsterUnit monster)
     {
         if (!monster.Dead) return;
-        var state = finalizedLethalPublications.GetValue(monster, _ => new LethalFinalization());
+        var state = _finalizedLethalPublications.GetValue(monster, _ => new LethalFinalization());
         if (Interlocked.Exchange(ref state.Started, 1) != 0) return;
         foreach (var handler in AfterLethalPublication)
             try { await handler(monster); }
-            catch (Exception error) { log.LogError(error, "Postcommit death finalizer failed for {Uid}", monster.Uid); }
+            catch (Exception error) { _log.LogError(error, "Postcommit death finalizer failed for {Uid}", monster.Uid); }
     }
 
     private async Task CommitMonsterDeathAsync(GameSession player, MonsterUnit monster, long previousHp, long damage,
@@ -93,12 +100,12 @@ public sealed partial class CombatService : IGameTicker
             && ReferenceEquals(player.Attachment, attachment) && attachment?.Cancelled != true
             && !player.SceneLoading && player.SceneGeneration == sceneGeneration
             && player.WorldScene == worldScene && player.WorldScene == monster.WorldScene
-            && sessions.All().Contains(player);
+            && _sessions.All().Contains(player);
         InstanceDeathGate? gate = null;
         if (monster.InstanceId != 0)
         {
-            if (!instanceDeathGates.TryGetValue(monster.InstanceId, out gate))
-                instanceDeathGates[monster.InstanceId] = gate = new();
+            if (!_instanceDeathGates.TryGetValue(monster.InstanceId, out gate))
+                _instanceDeathGates[monster.InstanceId] = gate = new();
             gate.Users++;
             await gate.Semaphore.WaitAsync();
         }
@@ -108,7 +115,7 @@ public sealed partial class CombatService : IGameTicker
             if (!OriginalRecipient()) throw new OperationCanceledException("Kill recipient changed before reward admission.");
             // Reward presentation is bound to its recipient lease. Keep that binding on an awaited
             // child permit so cancellation cannot suppress an already committed cast's hit/corpse.
-            await loop.TrackAsync("durable kill reward", async () =>
+            await _loop.TrackAsync("durable kill reward", async () =>
             {
                 foreach (var handler in BeforeKilled)
                 {
@@ -128,7 +135,7 @@ public sealed partial class CombatService : IGameTicker
             {
                 monster.DeathDurable = true;
                 monster.Hp = 0; // a retained retry may have entered at the restored 1 HP
-                await monsters.KillAsync(monster);
+                await _monsters.KillAsync(monster);
             }
             else if (monster.RewardSettlement?.OutcomeUnknown != true)
             {
@@ -144,7 +151,7 @@ public sealed partial class CombatService : IGameTicker
             if (gate != null)
             {
                 gate.Semaphore.Release();
-                if (--gate.Users == 0) { instanceDeathGates.Remove(monster.InstanceId); gate.Semaphore.Dispose(); }
+                if (--gate.Users == 0) { _instanceDeathGates.Remove(monster.InstanceId); gate.Semaphore.Dispose(); }
             }
         }
     }
@@ -158,7 +165,7 @@ public sealed partial class CombatService : IGameTicker
             && ReferenceEquals(player.Attachment, attachment) && attachment?.Cancelled != true
             && !player.SceneLoading && player.SceneGeneration == sceneGeneration
             && player.WorldScene == worldScene && player.WorldScene == monster.WorldScene
-            && sessions.All().Contains(player);
+            && _sessions.All().Contains(player);
         try
         {
             if (monster.Hp == 0) monster.StagedLethalDamage = damage;
@@ -201,7 +208,7 @@ public sealed partial class CombatService : IGameTicker
         {
             if (!CanPublish()) break;
             try { await handler(player, monster); }
-            catch (Exception e) { log.LogError(e, "Postcommit kill observer failed for {Source}", monster.RewardSource?.Key); }
+            catch (Exception e) { _log.LogError(e, "Postcommit kill observer failed for {Source}", monster.RewardSource?.Key); }
         }
     }
 
@@ -236,6 +243,14 @@ public sealed partial class CombatService : IGameTicker
 
     // Totem passives need the row and final target before the existing post-hit event loses that context.
     public List<Func<GameSession, JsonElement, Task>> CastLanded { get; } = new();
+    /// <summary>After a player's own cast applied its effects, with the monsters it processed and its published hit (each
+    /// target's result, the allies it healed) (TalentProcs).</summary>
+    internal List<Func<GameSession, ActiveSkillCast, IReadOnlyList<MonsterUnit>, SkillHitInfo, Task>> CastResolved { get; } = [];
+    /// <summary>The row a cast deals its damage with once its monster targets are chosen ("For every enemy hit by [Hammer
+    /// Fall], ... increases"), by their count (TalentProcs).</summary>
+    internal Func<GameSession, JsonElement, int, JsonElement>? TargetCountRow { get; set; }
+    /// <summary>May the caster's skill put this _kBuff1 buff on the recipient (TalentProcs: talent-gated buffs).</summary>
+    internal Func<GameSession, GameSession, int, bool>? SkillBuffAllowed { get; set; }
     public List<Func<GameSession, MonsterUnit, JsonElement, DamageHitResult, long, long>> DamageAdjusters { get; } = new();
     public List<Func<GameSession, MonsterUnit, JsonElement, long, long>> ExtraHitDamage { get; } = new();
     public List<Func<GameSession, MonsterUnit, JsonElement, long, Task>> DealtAsync { get; } = new();
@@ -252,19 +267,22 @@ public sealed partial class CombatService : IGameTicker
     public Func<GameSession, GameSession, JsonElement, Task<bool>>? ReviveItemSkill { get; set; }
 
     public CombatService(World world, MonsterService monsters, CharacterService character, SkillService skills, SceneService scene, BuffService buffs,
-        WorldData worldData, SessionRegistry sessions, GameData data, GameLoop loop, ILogger<CombatService> log)
+        WorldData worldData, SessionRegistry sessions, GameData data, GameLoop loop, ILogger<CombatService> log, PetService pets,
+        SeasonTalentService talents)
     {
-        this.world = world;
-        this.monsters = monsters;
-        this.character = character;
-        this.skills = skills;
-        this.scene = scene;
-        this.buffs = buffs;
-        this.worldData = worldData;
-        this.sessions = sessions;
-        this.data = data;
-        this.loop = loop;
-        this.log = log;
+        this._world = world;
+        this._monsters = monsters;
+        this._character = character;
+        this._skills = skills;
+        this._scene = scene;
+        this._buffs = buffs;
+        this._worldData = worldData;
+        this._sessions = sessions;
+        this._data = data;
+        this._loop = loop;
+        this._log = log;
+        _pets = pets;
+        WireGuardians();
         monsters.Attack = MonsterAttackAsync;
         buffs.ImmuneDeathDeclined = PlayerDiesAsync;
         scene.Leaving.Add(ClearSkillsAsync);
@@ -275,6 +293,7 @@ public sealed partial class CombatService : IGameTicker
         skills.Learned.Add(RefreshSkillParametersAsync);
         skills.Learned.Add(character.RefreshStatsAsync);
         buffs.Changed.Add(RefreshSkillParametersAsync);
+        talents.EffectsChanged.Add(RefreshSkillParametersAsync);
         scene.Loaded.Add(RefreshSkillParametersAsync);
         scene.Leaving.Add(ClearSceneSkillProtocolAsync);
         skills.QueueEligibility = CanQueueSkill;
@@ -292,17 +311,26 @@ public sealed partial class CombatService : IGameTicker
     public void Lock(GameSession s, LockEnemyReq req)
     {
         s.LockTarget = req.EnemyId;
-        log.LogDebug("{Name} locks {Target}", s.Role?.Name, req.EnemyId);
+        _log.LogDebug("{Name} locks {Target}", s.Role?.Name, req.EnemyId);
     }
 
     /// <summary>The template's damage EffectData (hit fx + flinch): the first with m_kDamage in [show*100, show*100+99].</summary>
     private int HitEffect(long scriptShow)
     {
-        var effects = data.SkillTemplateTable("Lua_Config_EffectData");
+        var effects = _data.SkillTemplateTable("Lua_Config_EffectData");
         for (long id = scriptShow * 100; id < scriptShow * 100 + 100; id++)
             if (effects.TryGetValue(id.ToString(), out var e) && e.TryGetProperty("m_kDamage", out _)) return (int)id;
         return 1000002;
     }
+
+    /// <summary>
+    /// SkillHitInfo.split: how many damage words the client shows for one hit. SkillConfig._kShowDmg holds one count
+    /// per show attack point and only the server reads it. LC_DamageHelper.ProcessDamageWord divides the damage into
+    /// that many words and, for the caster, adds a running total (Dmg_Accumulate) for skills with _iAccumDmgType, so
+    /// with split 1 the total repeats the hit. A cast resolves at its first attack point, so the first count applies
+    /// (inferred for skills with several points).
+    /// </summary>
+    private static int HitSplit(JsonElement row) => (int)Math.Max(1, new SkillConfig(row).ShowDmg.FirstOrDefault(1));
 
     // ---- monsters hitting players ----
 
@@ -318,7 +346,7 @@ public sealed partial class CombatService : IGameTicker
             || attempt.InstanceId != pet.InstanceId || target.InstanceId != pet.InstanceId
             || !attempt.Pets.Contains(pet) || !pet.AttackSkills.Any(s => s.Id == skillId)
             || MonsterService.Distance(pet.X, pet.Z, target.X, target.Z) > pet.AttackSkills.First(s => s.Id == skillId).Range + 1f
-            || data.Row("SkillConfig", skillId) is not { } row
+            || _data.Row("SkillConfig", skillId) is not { } row
             || owner.WorldScene != pet.WorldScene || target.WorldScene != pet.WorldScene
             || !pet.TryBeginCast(pet.AttackSkills.First(s => s.Id == skillId), Now)) return;
         var castingRole = owner.Role;
@@ -332,7 +360,7 @@ public sealed partial class CombatService : IGameTicker
             SrcID = pet.Uid, SkillID = skillId, TargetId = target.Uid, TargetPos = target.Pos,
             Face = pet.Face, SessionId = castId, SkillMs = duration, StartTime = now, PetConfigId = pet.PetId,
         };
-        await world.ToUnitViewersAsync(pet, UseInSkill, use);
+        await _world.ToUnitViewersAsync(pet, UseInSkill, use);
         if (!pet.Viewers.Contains(owner)) await owner.SendGameAsync(UseInSkill, use);
         // The exact server pet hit point is unavailable. Schedule at 40% of the configured action (inferred).
         ScheduleRuntime(pet.WorldScene, TimeSpan.FromMilliseconds(duration * 0.4), async () =>
@@ -344,7 +372,7 @@ public sealed partial class CombatService : IGameTicker
                 && area.GetArrayLength() > 0 ? (float)(GameData.Number(area[0]) ?? 0) / 100f : 0f;
             int limit = (int)Math.Max(1, GameData.Int(row, "_iTargetMax"));
             var targets = GameData.Int(row, "_iRangeType") == 2 && radius > 0
-                ? world.Map(pet.WorldScene).Near(pet.X, pet.Z, radius + 1).OfType<MonsterUnit>()
+                ? _world.Map(pet.WorldScene).Near(pet.X, pet.Z, radius + 1).OfType<MonsterUnit>()
                     .Where(m => !m.Dead && m.Hp > 0 && m.InstanceId == pet.InstanceId
                         && MonsterService.Distance(pet.X, pet.Z, m.X, m.Z) <= radius + 0.5f)
                     .OrderBy(m => MonsterService.Distance(pet.X, pet.Z, m.X, m.Z)).Take(limit).ToList()
@@ -363,57 +391,59 @@ public sealed partial class CombatService : IGameTicker
             var killed = new List<MonsterUnit>();
             try
             {
-            foreach (var monster in targets)
-            {
-                if (monster.Dead || monster.Hp <= 0) continue; // another cast may have reserved this actor while we awaited
-                processed.Add(monster);
-                var defender = new Fighter(0, 0, monster.Template.Flee, 0, monster.Template.Level, monster.Template.Element)
-                    { Def = monster.Template.Def, Mdef = monster.Template.Mdef, Flee = monster.Template.Flee };
-                var (damage, result) = Damage(attacker, defender, row);
-                foreach (var adjust in MonsterDamageAdjusters) damage = adjust(monster, damage, false);
-                long previousHp = monster.Hp;
-                monster.Hp = Math.Max(0, monster.Hp - damage);
-                if (monster.Hp == 0) killed.Add(monster); // reserve before awaited callbacks
-                await SettleMonsterHitAsync(owner, monster, previousHp, damage);
-                hit.Dsts.Add(new DamageInfo { DstID = monster.Uid, Damage = damage, HitResult = result,
-                    DstElement = monster.Template.Element, IsDead = monster.Hp == 0 });
-            }
-            foreach (var viewer in processed.SelectMany(m => m.Viewers).Append(owner).Distinct())
-                await viewer.SendGameAsync(SkillHit, hit);
-            foreach (var monster in processed)
-            {
-                if (a.Settled || owner.Dead) return;
-                if (monster.Hp == 0 && !monster.DeathDurable) continue; // another cast's uncommitted death
-                await world.ToUnitViewersAsync(monster, AoiAttrChange, MonsterService.Hp(monster));
-                if (monster.Hp > 0)
+                foreach (var monster in targets)
                 {
-                    monsters.Engage(monster, pet);
-                    await FightingAsync(monster);
-                    continue;
-                }
-                if (!killed.Contains(monster)) continue; // a concurrent player/pet owns that lethal resolution
-                await monsters.KillAsync(monster);
-                foreach (var other in sessions.All().Where(o => o.Attack?.Target == monster))
-                {
-                    other.Attack = null;
-                    await other.SendGameAsync(SkillEnd, new SkillEndNotify
+                    if (monster.Dead || monster.Hp <= 0) continue; // another cast may have reserved this actor while we awaited
+                    processed.Add(monster);
+                    var defender = MonsterFighter(monster);
+                    var (damage, result) = Damage(attacker, defender, row);
+                    foreach (var adjust in MonsterDamageAdjusters) damage = adjust(monster, damage, false);
+                    long previousHp = monster.Hp;
+                    monster.Hp = Math.Max(0, monster.Hp - damage);
+                    if (monster.Hp == 0) killed.Add(monster); // reserve before awaited callbacks
+                    await SettleMonsterHitAsync(owner, monster, previousHp, damage);
+                    hit.Dsts.Add(new DamageInfo
                     {
-                        SrcID = other.Role!.Id, SessionId = castId, Type = SkillEndNotify.Types.SkillEndType.Interrupted,
-                        InterruptedInfo = new SkillInterruptedInfo { Type = SkillInterruptedInfo.Types.SkillInterruptType.LockerInvalid },
+                        DstID = monster.Uid, Damage = damage, HitResult = result,
+                        DstElement = monster.Template.Element, IsDead = monster.Hp == 0
                     });
                 }
-                await PublishDurableKillAsync(owner, monster, () => ReferenceEquals(owner.Role, castingRole)
-                    && ReferenceEquals(owner.Attachment, castingAttachment) && !owner.SceneLoading
-                    && owner.SceneGeneration == castingSceneGeneration && owner.WorldScene == monster.WorldScene);
-            }
+                foreach (var viewer in processed.SelectMany(m => m.Viewers).Append(owner).Distinct())
+                    await viewer.SendGameAsync(SkillHit, hit);
+                foreach (var monster in processed)
+                {
+                    if (a.Settled || owner.Dead) return;
+                    if (monster.Hp == 0 && !monster.DeathDurable) continue; // another cast's uncommitted death
+                    await _world.ToUnitViewersAsync(monster, AoiAttrChange, MonsterService.Hp(monster));
+                    if (monster.Hp > 0)
+                    {
+                        _monsters.Engage(monster, pet);
+                        await FightingAsync(monster);
+                        continue;
+                    }
+                    if (!killed.Contains(monster)) continue; // a concurrent player/pet owns that lethal resolution
+                    await _monsters.KillAsync(monster);
+                    foreach (var other in _sessions.All().Where(o => o.Attack?.Target == monster))
+                    {
+                        other.Attack = null;
+                        await other.SendGameAsync(SkillEnd, new SkillEndNotify
+                        {
+                            SrcID = other.Role!.Id, SessionId = castId, Type = SkillEndNotify.Types.SkillEndType.Interrupted,
+                            InterruptedInfo = new SkillInterruptedInfo { Type = SkillInterruptedInfo.Types.SkillInterruptType.LockerInvalid },
+                        });
+                    }
+                    await PublishDurableKillAsync(owner, monster, () => ReferenceEquals(owner.Role, castingRole)
+                        && ReferenceEquals(owner.Attachment, castingAttachment) && !owner.SceneLoading
+                        && owner.SceneGeneration == castingSceneGeneration && owner.WorldScene == monster.WorldScene);
+                }
             }
             finally
             {
                 foreach (var monster in killed.Where(m => m.Hp == 0 && m.DeathDurable))
                 {
                     if (!monster.Dead)
-                        try { await monsters.KillAsync(monster); }
-                        catch (Exception e) { log.LogError(e, "Could not publish durable pet kill {Source}", monster.RewardSource?.Key); }
+                        try { await _monsters.KillAsync(monster); }
+                        catch (Exception e) { _log.LogError(e, "Could not publish durable pet kill {Source}", monster.RewardSource?.Key); }
                     await PublishDurableKillAsync(owner, monster, () => ReferenceEquals(owner.Role, castingRole)
                         && ReferenceEquals(owner.Attachment, castingAttachment) && !owner.SceneLoading
                         && owner.SceneGeneration == castingSceneGeneration && owner.WorldScene == monster.WorldScene);
@@ -434,13 +464,13 @@ public sealed partial class CombatService : IGameTicker
             SrcID = monster.Uid, SkillID = monster.Template.NormalSkill, TargetId = pet.Uid, TargetPos = pet.Pos,
             Face = monster.Face, SessionId = castId, SkillMs = monster.Template.SkillMs, StartTime = Now,
         };
-        await world.ToUnitViewersAsync(monster, UseInSkill, use);
+        await _world.ToUnitViewersAsync(monster, UseInSkill, use);
         ScheduleRuntime(monster.WorldScene, TimeSpan.FromSeconds(monster.Template.HitPointSeconds), async () =>
         {
             if (pet.Dead || pet.Hp <= 0 || monster.Dead || monster.Hp <= 0 || monster.WorldScene != pet.WorldScene
                 || pet.Owner.TowerAttempt is not { Loaded: true, Settled: false } current || !current.Pets.Contains(pet)
                 || MonsterService.Distance(monster.X, monster.Z, pet.X, pet.Z) > monster.Template.AttackRange + 2f) return;
-            await DamageTowerPetAsync(monster, pet, data.Row("SkillConfig", monster.Template.NormalSkill), monster.Template.NormalSkill, castId, 1000002);
+            await DamageTowerPetAsync(monster, pet, _data.Row("SkillConfig", monster.Template.NormalSkill), monster.Template.NormalSkill, castId, 1000002);
         });
     }
 
@@ -448,19 +478,19 @@ public sealed partial class CombatService : IGameTicker
     private async Task DamageTowerPetAsync(MonsterUnit monster, TowerPetUnit pet, JsonElement? row, int skillId, long castId,
         int showPoint, int damagePercent = 100)
     {
-        var attacker = new Fighter(monster.Template.Atk, monster.Template.Matk, monster.Template.Hit,
-            monster.Template.Cri, monster.Template.Level, monster.Template.Element);
+        var attacker = MonsterFighter(monster);
         var stats = pet.CombatStats;
         var defender = new Fighter(0, 0, 0, 0, pet.Level, pet.Element)
-            { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
+        { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
         var (damage, result) = row is { } r ? Damage(attacker, defender, r)
             : (Math.Max(1, monster.Template.Atk), DamageHitResult.Normal);
         damage = ScaleMonsterDamage(damage, monster.DamageRatio);
+        damage = MonsterBuffDamage(monster, row, damage);
         if (damagePercent != 100) damage = damagePercent <= 0 ? 0 : ScaleMonsterDamage(damage, damagePercent * 100);
         foreach (var adjust in MonsterDamageAdjusters) damage = adjust(monster, damage, true);
-        damage = ApplyPetSupportResistance(damage, buffs.UnitAttributes(pet), row, monster.Template.Element);
+        damage = ApplyPetSupportResistance(damage, _buffs.UnitAttributes(pet), row, monster.Template.Element);
         long beforeShield = damage;
-        damage = await buffs.AbsorbAsync(pet, damage);
+        damage = await _buffs.AbsorbAsync(pet, damage);
         pet.Hp = Math.Max(0, pet.Hp - damage);
         // Reserve death before any awaited broadcasts: neither the pet nor another pending swing
         // may act on zero HP while the death notification and substitution are being delivered.
@@ -472,18 +502,18 @@ public sealed partial class CombatService : IGameTicker
             Dsts = { new DamageInfo { DstID = pet.Uid, Damage = damage, SheildDamage = beforeShield - damage, HitResult = result,
                 DstElement = pet.Element, IsDead = pet.Hp == 0 } },
         };
-        await world.ToUnitViewersAsync(monster, SkillHit, hit);
-        await world.ToUnitViewersAsync(pet, AoiAttrChange, pet.HpChange());
+        await _world.ToUnitViewersAsync(monster, SkillHit, hit);
+        await _world.ToUnitViewersAsync(pet, AoiAttrChange, pet.HpChange());
         if (!pet.Dead) return;
-        await buffs.ClearUnitAsync(pet);
+        await _buffs.ClearUnitAsync(pet);
         if (ReferenceEquals(monster.PetTarget, pet)) monster.PetTarget = null;
-        await world.ToUnitViewersAsync(pet, EntityBaseChange, pet.StateChange());
+        await _world.ToUnitViewersAsync(pet, EntityBaseChange, pet.StateChange());
         foreach (var handler in TowerPetDied) await handler(pet);
     }
 
     private async Task MonsterAttackAsync(MonsterUnit m, GameSession p)
     {
-        if (m.Dead || m.Hp <= 0) return;
+        if (m.Dead || m.Hp <= 0 || _buffs.UnitForbidden(m, ForbiddenState.NormalAttack) || Stealthed(p) || !_buffs.CanSeePosition(m, p.Position)) return;
         var targetRole = p.Role;
         if (targetRole == null) return;
         long targetScene = p.WorldScene;
@@ -498,21 +528,22 @@ public sealed partial class CombatService : IGameTicker
         // Like a player's cast: a row with an _iSkillEffectLevel takes the HIGH_LEVEL route (the Phantom Realm and
         // Valhalla Maya swings 4340001/5920101 have level 1). A normal attack never starts a boss-panel cooldown
         // (31125 is for the boss's skills).
-        await SendMonsterTimelineAsync(m, use, highLevel: data.Row("SkillConfig", m.Template.NormalSkill) is { } swingRow
+        await SendMonsterTimelineAsync(m, use, highLevel: _data.Row("SkillConfig", m.Template.NormalSkill) is { } swingRow
             && GameData.Int(swingRow, "_iSkillEffectLevel") > 0);
         ScheduleRuntime(m.WorldScene, TimeSpan.FromSeconds(m.Template.HitPointSeconds), async () =>
         {
-            if (m.Dead || m.Hp <= 0 || p.Dead || p.Role == null || p.SceneLoading || p.WorldScene != m.WorldScene) return;
+            if (m.Dead || m.Hp <= 0 || _buffs.UnitForbidden(m, ForbiddenState.NormalAttack) || Stealthed(p) || p.Dead || p.Role == null || p.SceneLoading || p.WorldScene != m.WorldScene) return;
             if (!ReferenceEquals(p.Role, targetRole) || p.WorldScene != targetScene
                 || p.SceneGeneration != targetGeneration || !ReferenceEquals(p.Attachment, targetLease)
                 || targetLease?.Cancelled == true) return;
-            if (MonsterService.Distance(m, p) > m.Template.AttackRange + 2f) return; // stepped away
-            var stats = character.Stats(p);
-            var attacker = new Fighter(m.Template.Atk, m.Template.Matk, m.Template.Hit, m.Template.Cri, m.Template.Level, m.Template.Element);
+            if (MonsterService.Distance(m, p) > m.Template.AttackRange + 2f || !_buffs.CanSeePosition(m, p.Position)) return; // stepped away
+            var stats = _character.Stats(p);
+            var attacker = MonsterFighter(m);
             var defender = new Fighter(0, 0, 0, 0, p.Progress!.Level, 1) { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
-            var row = data.Row("SkillConfig", m.Template.NormalSkill);
+            var row = _data.Row("SkillConfig", m.Template.NormalSkill);
             var (damage, result) = row is { } r ? Damage(attacker, defender, r) : (Math.Max(1, m.Template.Atk), DamageHitResult.Normal);
             damage = ScaleMonsterDamage(damage, m.DamageRatio);
+            damage = MonsterBuffDamage(m, row, damage);
             foreach (var adjust in MonsterDamageAdjusters) damage = adjust(m, damage, true);
             if (damage > 0) foreach (var modifier in IncomingDamageAdjusters) damage = Math.Max(0, await modifier(m, p, result, damage));
             var committed = await CommitPlayerDamageAsync(p, damage, row,
@@ -525,19 +556,19 @@ public sealed partial class CombatService : IGameTicker
             (damage, long hp, _, long shieldDamage) = committed.Value;
             try
             {
-            foreach (var handler in Taken) handler(m, p, damage, hp == 0);
-            var hit = new SkillHitInfo
-            {
-                SrcID = m.Uid, SkillId = m.Template.NormalSkill, ShowPoint = 1000002, SessionId = session, SrcElement = m.Template.Element,
-                Dsts = { new DamageInfo { DstID = p.Role.Id, Damage = damage, SheildDamage = shieldDamage, HitResult = result, DstElement = 1, IsDead = hp == 0 } },
-            };
-            await world.ToUnitViewersAsync(m, SkillHit, hit);
-            if (!m.Viewers.Contains(p)) await p.SendGameAsync(SkillHit, hit);
-            await character.SetHpSpAsync(p, null, null); // publish the reserved/current HP; never undo a later hit
-            foreach (var handler in TakenAsync) await handler(m, p, damage);
-            await FightingAsync(p);
-            await FightingAsync(m);
-            if (hp == 0) await PlayerDiesAsync(p);
+                foreach (var handler in Taken) handler(m, p, damage, hp == 0);
+                var hit = new SkillHitInfo
+                {
+                    SrcID = m.Uid, SkillId = m.Template.NormalSkill, ShowPoint = 1000002, SessionId = session, SrcElement = m.Template.Element,
+                    Dsts = { new DamageInfo { DstID = p.Role.Id, Damage = damage, SheildDamage = shieldDamage, HitResult = result, DstElement = 1, IsDead = hp == 0 } },
+                };
+                await _world.ToUnitViewersAsync(m, SkillHit, hit);
+                if (!m.Viewers.Contains(p)) await p.SendGameAsync(SkillHit, hit);
+                await _character.SetHpSpAsync(p, null, null); // publish the reserved/current HP; never undo a later hit
+                foreach (var handler in TakenAsync) await handler(m, p, damage);
+                await FightingAsync(p);
+                await FightingAsync(m);
+                if (hp == 0) await PlayerDiesAsync(p);
             }
             finally { if (hp == 0) ReleaseDeathPublication(p); }
         });
@@ -556,17 +587,21 @@ public sealed partial class CombatService : IGameTicker
         if (target.Dead || targetRole == null || !ReferenceEquals(target.Role, targetRole) || target.SceneLoading
             || valid?.Invoke() == false) return null;
         // A missed/fully absorbed hit must not spend a finite Safety Wall charge.
-        if (damage > 0 && (buffs.HasForbidden(target, 9) || await GroundProtectsAsync(target, row))) damage = 0;
+        if (damage > 0 && (_buffs.HasForbidden(target, ForbiddenState.Damage) || await GroundProtectsAsync(target, row))) damage = 0;
+        if (row is { } incomingSkill) damage = GuardianNormalAttackResistance(target, incomingSkill, damage);
         // (inferred) Support damage reductions precede the finite shield and lethal-hit handling.
         damage = ApplyPetSupportResistance(damage, target.Buffs.Where(b => b.ExpireMs > Now
-                && b.SourceId is >= (1L << 51) and < (1L << 52))
+                && (b.SourceId is >= TowerPetUnit.UidBase and < TowerPetUnit.UidLimit || b.IsGuardianOwned))
             .SelectMany(b => b.Changes).Select(c => (c.Attr, c.Value)), row, sourceElement);
         long beforeShield = damage;
-        damage = await buffs.AbsorbAsync(target, damage);
+        damage = await _buffs.AbsorbAsync(target, damage);
+        long shieldDamage = beforeShield - damage;
         if (!ReferenceEquals(target.Role, targetRole) || target.SceneLoading || valid?.Invoke() == false) return null;
-        long before = character.Stats(target)[2000];
+        long before = _character.Stats(target)[2000];
+        long floor = GuardianHpFloor(target, before);
+        if (floor > 0) damage = Math.Min(damage, Math.Max(0, before - floor));
         long hp = Math.Max(0, before - damage);
-        if (hp == 0 && await buffs.TryPreventLethalAsync(target)) hp = character.Stats(target)[2000];
+        if (hp == 0 && await _buffs.TryPreventLethalAsync(target)) hp = _character.Stats(target)[2000];
         if (!ReferenceEquals(target.Role, targetRole) || target.SceneLoading || valid?.Invoke() == false) return null;
         target.CurrentHp = hp;
         if (hp == 0)
@@ -578,7 +613,7 @@ public sealed partial class CombatService : IGameTicker
                 _deathPublications.Add(target);
             }
         }
-        return (damage, hp, Math.Max(0, before - hp), beforeShield - damage);
+        return (damage, hp, Math.Max(0, before - hp), shieldDamage);
     }
 
     // ---- damage formula (inferred) ----
@@ -591,14 +626,16 @@ public sealed partial class CombatService : IGameTicker
         public long ResCri { get; init; }
     }
 
-    private (long Damage, DamageHitResult Result) Damage(Fighter a, Fighter b, JsonElement skill, int branch = 0)
+    private (long Damage, DamageHitResult Result) Damage(Fighter a, Fighter b, JsonElement skill, int branch = 0,
+        double bonusCrit = 0, bool forceCrit = false)
     {
         // A skill that never misses (_iSkillHit 10000) draws no hit roll, as before.
         if (GameData.Int(skill, "_iSkillHit") < 10000 && Rolls.Hit() >= HitRate(a, b, skill)) return (0, DamageHitResult.Miss);
         double dmg = BaseDamage(a, b, skill, branch, out bool magic);
         dmg *= 0.97 + Rolls.DamageFloat() * 0.06; // DamageFloat [9700, 10300]
         var result = DamageHitResult.Normal;
-        if (!magic && Rolls.Crit() < CritRate(a, b, skill))
+        // (inferred) Miguel's guardian crit bonus (bonusCrit/forceCrit) also lets a magic hit crit; nothing else changes.
+        if (forceCrit || (!magic || bonusCrit > 0) && Rolls.Crit() < CritRate(a, b, skill) + bonusCrit)
         {
             dmg *= 1.5; // FormulaParamCriDmg 15000
             result = DamageHitResult.Critical;
@@ -643,14 +680,14 @@ public sealed partial class CombatService : IGameTicker
     /// </summary>
     internal (double PlayerDps, double MonsterDps, long PlayerHp) Duel(GameSession p, MonsterTemplate m)
     {
-        var stats = character.Stats(p);
-        var playerSkill = data.Row("SkillConfig", skills.NormalAttack(p.Progress!.Career))!.Value;
+        var stats = _character.Stats(p);
+        var playerSkill = _data.Row("SkillConfig", _skills.NormalAttack(p.Progress!.Career))!.Value;
         var player = new Fighter(stats[103], stats[104], stats[109], stats[111], p.Progress.Level, 1);
         var asTarget = new Fighter(0, 0, m.Flee, 0, m.Level, m.Element) { Def = m.Def, Mdef = m.Mdef, Flee = m.Flee };
         double playerDps = ExpectedDamage(player, asTarget, playerSkill) * 1000.0 / Math.Max(1, SkillMs(p, playerSkill));
         var monster = new Fighter(m.Atk, m.Matk, m.Hit, m.Cri, m.Level, m.Element);
         var defender = new Fighter(0, 0, 0, 0, p.Progress.Level, 1) { Def = stats[105], Mdef = stats[106], Flee = stats[110], ResCri = stats[112] };
-        double monsterHit = data.Row("SkillConfig", m.NormalSkill) is { } row ? ExpectedDamage(monster, defender, row) : Math.Max(1, m.Atk);
+        double monsterHit = _data.Row("SkillConfig", m.NormalSkill) is { } row ? ExpectedDamage(monster, defender, row) : Math.Max(1, m.Atk);
         return (playerDps, monsterHit * 1000.0 / Math.Max(1, m.SwingIntervalMs), stats[101]);
     }
 
@@ -661,7 +698,7 @@ public sealed partial class CombatService : IGameTicker
 
     private double ElementFactor(int attacker, int defender)
     {
-        if (attacker is < 1 or > 10 || data.Row("EleConfig", defender) is not { } row) return 0;
+        if (attacker is < 1 or > 10 || _data.Row("EleConfig", defender) is not { } row) return 0;
         return GameData.Int(row, ElementColumns[attacker - 1]);
     }
 
@@ -681,7 +718,7 @@ public sealed partial class CombatService : IGameTicker
         if ((m.StatusBits & FightBit) != 0) return;
         m.StatusBits |= FightBit;
         _fightingMonsters.Add(m);
-        await world.ToUnitViewersAsync(m, AoiAttrChange, Status(m.Uid, m.StatusBits));
+        await _world.ToUnitViewersAsync(m, AoiAttrChange, Status(m.Uid, m.StatusBits));
     }
 
     /// <summary>31048 state_info: the whole status word in values[0] (one element, even 0).</summary>
@@ -698,20 +735,20 @@ public sealed partial class CombatService : IGameTicker
         lock (_reviveClaims) ownsPublication = _deathPublications.Add(p);
         try
         {
-        eventAttacks.Remove(p);
-        if (!p.Dead || p.ReviveDeathSource == null)
-            p.ReviveDeathSource = RewardSourceId.ProcessRun + "/" + Guid.NewGuid().ToString("N");
-        p.Dead = true;
-        await ClearSkillsAsync(p);
-        await buffs.ClearOnDeathAsync(p);
-        log.LogInformation("{Name} died", p.Role?.Name);
-        await ToPlayerAndViewersAsync(p, EntityBaseChange, LifeState(p));
-        if (!ReviveInfoOwners.Any(owns => owns(p)))
-            await p.SendGameAsync(ReviveInfo, new SyncClientPlayerReviveInfoNtf
-            {
-                BDead = true, ReviveTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30, SceneEntry = p.SceneEntry,
-            });
-        foreach (var handler in PlayerDied) await handler(p);
+            _eventAttacks.Remove(p);
+            if (!p.Dead || p.ReviveDeathSource == null)
+                p.ReviveDeathSource = RewardSourceId.ProcessRun + "/" + Guid.NewGuid().ToString("N");
+            p.Dead = true;
+            await ClearSkillsAsync(p);
+            await _buffs.ClearOnDeathAsync(p);
+            _log.LogInformation("{Name} died", p.Role?.Name);
+            await ToPlayerAndViewersAsync(p, EntityBaseChange, LifeState(p));
+            if (!ReviveInfoOwners.Any(owns => owns(p)))
+                await p.SendGameAsync(ReviveInfo, new SyncClientPlayerReviveInfoNtf
+                {
+                    BDead = true, ReviveTime = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 30, SceneEntry = p.SceneEntry,
+                });
+            foreach (var handler in PlayerDied) await handler(p);
         }
         finally { if (ownsPublication) ReleaseDeathPublication(p); }
     }
@@ -729,7 +766,7 @@ public sealed partial class CombatService : IGameTicker
         var (_, hp, effective, _) = committed.Value;
         try
         {
-            await character.SetHpSpAsync(p, null, null);
+            await _character.SetHpSpAsync(p, null, null);
             if (hp == 0) await PlayerDiesAsync(p);
         }
         finally { if (hp == 0) ReleaseDeathPublication(p); }
@@ -803,13 +840,13 @@ public sealed partial class CombatService : IGameTicker
         lock (_reviveClaims)
         {
             if (!_reviveClaims.Contains(p) || !p.Dead) return false;
-            var stats = character.Stats(p);
+            var stats = _character.Stats(p);
             p.CurrentHp = Math.Max(1, stats[101] * Math.Clamp(hpRate, 0, 10000) / 10000);
             p.CurrentSp = stats[102] * Math.Clamp(spRate, 0, 10000) / 10000;
             p.Dead = false;
             p.WorldState.ReviveSource = 0;
             p.WorldState.ReviveExpiresMs = 0;
-            character.Refresh(p);
+            _character.Refresh(p);
             return true;
         }
     }
@@ -834,20 +871,31 @@ public sealed partial class CombatService : IGameTicker
             if (committed) onCommitted?.Invoke();
             await p.SendGameAsync(Relive, new EntityReliveAck { Result = committed ? 0 : ErrorCodes.TargetAlive, EntityID = (ulong)p.Role!.Id });
             if (!committed) return false;
-            var map = worldData.Map(p.SceneEntry);
+            var map = _worldData.Map(p.SceneEntry);
             await PublishReviveAsync(p, map?.Revive ?? map?.Born);
             return true;
         }
         finally { ReleaseReviveClaim(p); }
     }
 
-    /// <summary>Publish an already committed resurrection; never changes the dead/alive state.</summary>
+    /// <summary>Test seam: runs after the first revive packet so a role handover can detach the session mid-publication.</summary>
+    internal Func<GameSession, Task>? ReviveBroadcastedForTest;
+
+    /// <summary>Publish an already committed resurrection; never changes the dead/alive state. A role handover can
+    /// detach the session (Role = null, RoleHandover.cs:100) at any await; the reconnect reloads the committed state,
+    /// so each step first checks that the role is still attached.</summary>
     public async Task PublishReviveAsync(GameSession p, MapPoint? point)
     {
+        if (p.Role == null) return;
         await ToPlayerAndViewersAsync(p, EntityBaseChange, LifeState(p));
-        if (point is { } at) await scene.TeleportInMapAsync(p, at);
-        await character.SetHpSpAsync(p, null, null); // send committed/current health; never overwrite later damage
+        if (ReviveBroadcastedForTest is { } seam) await seam(p);
+        if (p.Role == null) return;
+        if (point is { } at) await _scene.TeleportInMapAsync(p, at);
+        if (p.Role == null) return;
+        await _character.SetHpSpAsync(p, null, null); // send committed/current health; never overwrite later damage
+        if (p.Role == null) return;
         await p.SendGameAsync(ReviveInfo, new SyncClientPlayerReviveInfoNtf { BDead = p.Dead, SceneEntry = p.SceneEntry });
+        if (p.Role == null) return;
         await RefreshRevivedAsync(p);
     }
 
@@ -862,19 +910,19 @@ public sealed partial class CombatService : IGameTicker
     {
         long now = Now;
         TickEventPvP(now);
-        foreach (var s in sessions.All())
+        foreach (var s in _sessions.All())
         {
             if (s.Role == null || s.Progress == null) continue;
             if (s.SkillObjects.Count > 0)
-        foreach (var unit in s.SkillObjects.ToArray()) loop.TrackRuntimeDetached("skill object tick", () => TickSkillObjectAsync(unit));
+                foreach (var unit in s.SkillObjects.ToArray()) _loop.TrackRuntimeDetached("skill object tick", () => TickSkillObjectAsync(unit));
             if (s.Attack is { } a && !s.Dead && now >= a.NextSwingMs)
             {
                 if (s.SceneLoading || !CanHitMonster(s, a.Target) || MonsterService.Distance(a.Target, s) > 30)
                 {
                     s.Attack = null;
                     if (s.SkillCast?.Request.SkillId == a.SkillId)
-            loop.TrackRuntimeDetached("cast cancellation", () => CancelCastAsync(s, SkillInterruptedInfo.Types.SkillInterruptType.LockerInvalid));
-        else loop.TrackRuntimeDetached("skill end send", () => s.SendGameAsync(SkillEnd, new SkillEndNotify
+                        _loop.TrackRuntimeDetached("cast cancellation", () => CancelCastAsync(s, SkillInterruptedInfo.Types.SkillInterruptType.LockerInvalid));
+                    else _loop.TrackRuntimeDetached("skill end send", () => s.SendGameAsync(SkillEnd, new SkillEndNotify
                     {
                         SrcID = s.Role.Id, Type = SkillEndNotify.Types.SkillEndType.Interrupted,
                         InterruptedInfo = new SkillInterruptedInfo { Type = SkillInterruptedInfo.Types.SkillInterruptType.LockerInvalid },
@@ -883,13 +931,13 @@ public sealed partial class CombatService : IGameTicker
                 else if (s.SkillCast == null && EffectiveSkillRow(s, a.SkillId) is { } row && MonsterService.Distance(a.Target, s) <= Range(row) + 1.5f)
                 {
                     a.NextSwingMs = now + SkillMs(s, row);
-                loop.TrackRuntimeDetached("combat swing", () => SwingAsync(s, a.Target, a.SkillId, ++_sessionIds));
+                    _loop.TrackRuntimeDetached("combat swing", () => SwingAsync(s, a.Target, a.SkillId, ++_sessionIds));
                 }
             }
             if ((s.StatusBits & FightBit) != 0 && now - s.LastCombatMs > OutOfCombatMs)
             {
                 s.StatusBits &= ~FightBit;
-        loop.TrackRuntimeDetached("combat status send", () => ToPlayerAndViewersAsync(s, AoiAttrChange, Status(s.Role.Id, s.StatusBits)));
+                _loop.TrackRuntimeDetached("combat status send", () => ToPlayerAndViewersAsync(s, AoiAttrChange, Status(s.Role.Id, s.StatusBits)));
             }
         }
         if (_fightingMonsters.Count > 0)
@@ -898,7 +946,7 @@ public sealed partial class CombatService : IGameTicker
                 _fightingMonsters.Remove(m);
                 if ((m.StatusBits & FightBit) == 0) continue;
                 m.StatusBits &= ~FightBit;
-        loop.TrackRuntimeDetached("monster status send", () => world.ToUnitViewersAsync(m, AoiAttrChange, Status(m.Uid, m.StatusBits)));
+                _loop.TrackRuntimeDetached("monster status send", () => _world.ToUnitViewersAsync(m, AoiAttrChange, Status(m.Uid, m.StatusBits)));
             }
         // Every role still regenerates once per AutoRecoverInterval, but in its own phase (role id slot), so one
         // tick no longer computes every online stat sheet at once (150 roles = a 116 ms tick every 5 s).
@@ -909,12 +957,12 @@ public sealed partial class CombatService : IGameTicker
             // A late tick also serves the phases it skipped, so no role misses a cycle.
             long first = _regenSlot < 0 ? slot : Math.Max(_regenSlot + 1, slot - slots + 1);
             _regenSlot = slot;
-            foreach (var s in sessions.All())
+            foreach (var s in _sessions.All())
                 if (s.Role != null)
                 {
                     long phase = (s.Role.Id % slots + slots) % slots;
                     for (long k = first; k <= slot; k++)
-                if (k % slots == phase) { loop.TrackRuntimeDetached("combat regeneration", () => RegenAsync(s)); break; }
+                        if (k % slots == phase) { _loop.TrackRuntimeDetached("combat regeneration", () => RegenAsync(s)); break; }
                 }
         }
     }
@@ -926,17 +974,17 @@ public sealed partial class CombatService : IGameTicker
         using var held = await CharacterService.Lock(s);
         if (s.Role == null || s.Progress == null || s.Dead || (s.StatusBits & FightBit) != 0) return;
         if (s.CurrentHp == null && s.CurrentSp == null) return; // unset = full (CharacterService.Stats): nothing to restore
-        var st = character.Stats(s);
+        var st = _character.Stats(s);
         if (st[2000] >= st[101] && st[2001] >= st[102]) return;
         long rehp = st[107] + st[101] * st.Data.GetValueOrDefault(1071) / 10000;
         long resp = st[108] + st[102] * st.Data.GetValueOrDefault(1081) / 10000;
-        await character.SetHpSpAsync(s, st[2000] + Math.Max(1, rehp), st[2001] + Math.Max(1, resp));
+        await _character.SetHpSpAsync(s, st[2000] + Math.Max(1, rehp), st[2001] + Math.Max(1, resp));
     }
 
     private async Task ToPlayerAndViewersAsync(GameSession p, uint msgId, IMessage body)
     {
         await p.SendGameAsync(msgId, body);
-        var viewers = world.Viewers(p);
+        var viewers = _world.Viewers(p);
         if (viewers.Count == 0) return;
         var prepared = new PreparedMessage(msgId, body);
         foreach (var viewer in viewers) await viewer.SendPreparedAsync(prepared);

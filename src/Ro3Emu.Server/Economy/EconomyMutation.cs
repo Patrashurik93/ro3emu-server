@@ -38,7 +38,7 @@ public sealed class EconomyMutation
         if (CharacterFamilyEconomy.IsKind(kind)) return true;
         if (!kind.StartsWith("cd13b/", StringComparison.Ordinal)) return false;
         string name = kind[6..];
-        return new[] { "pet", "mount", "wardrobe", "totem", "emblem", "genre", "valhalla" }
+        return new[] { "pet", "mount", "wardrobe", "totem", "emblem", "genre", "valhalla", "paragon" }
             .Any(family => name == family || name.StartsWith(family + "-", StringComparison.Ordinal));
     }
     public string OperationId { get; }
@@ -170,10 +170,8 @@ public sealed class EconomyMutation
 }
 
 public sealed class EconomyOperationConflictException(string message) : InvalidOperationException(message);
-public sealed class EconomyOutcomeUnknownException : IOException
+public sealed class EconomyOutcomeUnknownException(string operationId, Exception writeFailure, Exception resolutionFailure) : IOException("Economic operation " + operationId + " has an unresolved commit outcome; owner reload is required.",
+        new AggregateException(writeFailure, resolutionFailure))
 {
-    public string OperationId { get; }
-    public EconomyOutcomeUnknownException(string operationId, Exception writeFailure, Exception resolutionFailure)
-        : base("Economic operation " + operationId + " has an unresolved commit outcome; owner reload is required.",
-            new AggregateException(writeFailure, resolutionFailure)) => OperationId = operationId;
+    public string OperationId { get; } = operationId;
 }
